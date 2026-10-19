@@ -3,7 +3,7 @@
 // See packages/coding-agent/docs/third-party/pi-retry/NOTICE.md.
 import type { Settings } from "../../core/settings-manager.ts";
 
-/** Settings namespace owned by this plugin, separate from Pie's native `retry` object. */
+/** Settings namespace owned by this plugin, separate from Pie's built-in `retry` object. */
 export const RETRY_SETTINGS_KEY = "pieRetry";
 
 export interface RetryPolicy {
@@ -24,6 +24,26 @@ export interface RetryPolicy {
 	retryContinuations: boolean;
 	/** Nudge a turn that ended with no usable output. Bounded to one nudge. */
 	retryEmptyStop: boolean;
+	/**
+	 * Retry an error by omitting the failed response and continuing the same
+	 * request, instead of queueing a hidden `Retry the previous request.`
+	 * message. Off by default, matching upstream.
+	 */
+	messageFreeRetries: boolean;
+}
+
+export interface RetrySubagentPolicy extends RetryPolicy {
+	/** Whether the plugin takes over retry for sessions selected by the matchers. */
+	enabled: boolean;
+	/** Compiled rules; a session whose system prompt matches any rule uses this policy. */
+	matchers: readonly RegExp[];
+}
+
+export interface RetrySettings {
+	/** Policy for an ordinary session. */
+	main: RetryPolicy;
+	/** Policy for a session selected by `pieRetry.subagents.match.systemPromptRegex`. */
+	subagents: RetrySubagentPolicy;
 }
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
@@ -34,60 +54,182 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 	maxContinuations: 10,
 	retryContinuations: true,
 	retryEmptyStop: true,
+	messageFreeRetries: false,
 };
+
+/** Regex flags accepted in settings; `g` and `y` would make `test()` stateful. */
+const SUPPORTED_REGEX_FLAGS = new Set(["i", "m", "s", "u"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function warn(message: string): void {
+	console.warn(`[pie-retry] ${message}`);
+}
+
 function readNumber(
-	settings: Record<string, unknown>,
-	key: keyof RetryPolicy,
+	values: Record<string, unknown>,
+	key: string,
 	fallback: number,
 	valid: (value: number) => boolean,
+	path = `${RETRY_SETTINGS_KEY}.${key}`,
 ): number {
-	const value = settings[key];
+	const value = values[key];
 	if (value === undefined) return fallback;
 	if (typeof value === "number" && Number.isFinite(value) && valid(value)) return value;
-	console.warn(`[pie-retry] Ignoring invalid ${RETRY_SETTINGS_KEY}.${String(key)} value: ${String(value)}`);
+	warn(`Ignoring invalid ${path} value: ${String(value)}`);
 	return fallback;
 }
 
-function readBoolean(settings: Record<string, unknown>, key: keyof RetryPolicy, fallback: boolean): boolean {
-	const value = settings[key];
+function readBoolean(
+	values: Record<string, unknown>,
+	key: string,
+	fallback: boolean,
+	path = `${RETRY_SETTINGS_KEY}.${key}`,
+): boolean {
+	const value = values[key];
 	if (value === undefined) return fallback;
 	if (typeof value === "boolean") return value;
-	console.warn(`[pie-retry] Ignoring invalid ${RETRY_SETTINGS_KEY}.${String(key)} value: ${String(value)}`);
+	warn(`Ignoring invalid ${path} value: ${String(value)}`);
 	return fallback;
 }
 
-/** Read the `pieRetry` policy from the session's merged global and project settings. */
-export function readRetryPolicy(settings: Settings): RetryPolicy {
-	const namespace = (settings as Record<string, unknown>)[RETRY_SETTINGS_KEY];
-	if (namespace !== undefined && !isRecord(namespace)) {
-		console.warn(`[pie-retry] Ignoring invalid ${RETRY_SETTINGS_KEY} settings; expected an object.`);
-		return { ...DEFAULT_RETRY_POLICY };
+function isSupportedFlags(flags: string): boolean {
+	const seen = new Set<string>();
+	for (const flag of flags) {
+		if (!SUPPORTED_REGEX_FLAGS.has(flag) || seen.has(flag)) return false;
+		seen.add(flag);
 	}
-	const values = isRecord(namespace) ? namespace : {};
+	return true;
+}
+
+/**
+ * Compile `pieRetry.subagents.match.systemPromptRegex`. An absent group yields
+ * no rules; any malformed entry yields no rules as well, so a broken rule can
+ * never select every session.
+ */
+function compileMatchers(subagents: Record<string, unknown>): RegExp[] {
+	const matchPath = `${RETRY_SETTINGS_KEY}.subagents.match`;
+	if (!Object.hasOwn(subagents, "match")) return [];
+	const match = subagents.match;
+	if (!isRecord(match)) {
+		warn(`Ignoring invalid ${matchPath} value: ${String(match)} (expected an object)`);
+		return [];
+	}
+	const rulesPath = `${matchPath}.systemPromptRegex`;
+	const rules = match.systemPromptRegex;
+	if (rules === undefined) return [];
+	if (!Array.isArray(rules)) {
+		warn(`Ignoring invalid ${rulesPath} value: ${String(rules)} (expected an array)`);
+		return [];
+	}
+	const compiled: RegExp[] = [];
+	for (const [index, rule] of rules.entries()) {
+		const rulePath = `${rulesPath}[${index}]`;
+		if (!isRecord(rule)) {
+			warn(`Ignoring invalid ${rulePath} value: ${String(rule)} (expected an object)`);
+			return [];
+		}
+		const pattern = rule.pattern;
+		if (typeof pattern !== "string" || pattern.trim().length === 0) {
+			warn(`Ignoring invalid ${rulePath}.pattern value: ${String(pattern)} (expected a non-empty regex source)`);
+			return [];
+		}
+		const rawFlags = rule.flags;
+		if (rawFlags !== undefined && typeof rawFlags !== "string") {
+			warn(`Ignoring invalid ${rulePath}.flags value: ${String(rawFlags)} (expected a string)`);
+			return [];
+		}
+		const flags = rawFlags ?? "";
+		if (!isSupportedFlags(flags)) {
+			warn(`Ignoring invalid ${rulePath}.flags value: ${flags} (allowed flags are unique i, m, s, and u)`);
+			return [];
+		}
+		try {
+			compiled.push(new RegExp(pattern, flags));
+		} catch (error) {
+			warn(`Ignoring invalid ${rulePath}.pattern value: ${pattern} (${String(error)})`);
+			return [];
+		}
+	}
+	return compiled;
+}
+
+function readPolicy(values: Record<string, unknown>, fallback: RetryPolicy, prefix?: string): RetryPolicy {
+	const path = (key: string) => (prefix ? `${prefix}.${key}` : `${RETRY_SETTINGS_KEY}.${key}`);
 	return {
-		baseDelayMs: readNumber(values, "baseDelayMs", DEFAULT_RETRY_POLICY.baseDelayMs, (value) => value >= 0),
-		maxDelayMs: readNumber(values, "maxDelayMs", DEFAULT_RETRY_POLICY.maxDelayMs, (value) => value >= 0),
-		multiplier: readNumber(values, "multiplier", DEFAULT_RETRY_POLICY.multiplier, (value) => value >= 1),
+		baseDelayMs: readNumber(values, "baseDelayMs", fallback.baseDelayMs, (value) => value >= 0, path("baseDelayMs")),
+		maxDelayMs: readNumber(values, "maxDelayMs", fallback.maxDelayMs, (value) => value >= 0, path("maxDelayMs")),
+		multiplier: readNumber(values, "multiplier", fallback.multiplier, (value) => value >= 1, path("multiplier")),
 		maxRetriesAtMaxDelay: readNumber(
 			values,
 			"maxRetriesAtMaxDelay",
-			DEFAULT_RETRY_POLICY.maxRetriesAtMaxDelay,
+			fallback.maxRetriesAtMaxDelay,
 			(value) => Number.isInteger(value) && value >= 1,
+			path("maxRetriesAtMaxDelay"),
 		),
 		maxContinuations: readNumber(
 			values,
 			"maxContinuations",
-			DEFAULT_RETRY_POLICY.maxContinuations,
+			fallback.maxContinuations,
 			(value) => Number.isInteger(value) && value >= 1,
+			path("maxContinuations"),
 		),
-		retryContinuations: readBoolean(values, "retryContinuations", DEFAULT_RETRY_POLICY.retryContinuations),
-		retryEmptyStop: readBoolean(values, "retryEmptyStop", DEFAULT_RETRY_POLICY.retryEmptyStop),
+		retryContinuations: readBoolean(
+			values,
+			"retryContinuations",
+			fallback.retryContinuations,
+			path("retryContinuations"),
+		),
+		retryEmptyStop: readBoolean(values, "retryEmptyStop", fallback.retryEmptyStop, path("retryEmptyStop")),
+		messageFreeRetries: readBoolean(
+			values,
+			"messageFreeRetries",
+			fallback.messageFreeRetries,
+			path("messageFreeRetries"),
+		),
 	};
+}
+
+/**
+ * Resolve the main policy and the subagent policy from the session's merged
+ * global and project settings. Pie merges project arrays over global ones, so a
+ * project matcher list replaces the global list, as upstream specifies. Omitted
+ * subagent fields inherit the main policy field by field.
+ */
+export function readRetrySettings(settings: Settings): RetrySettings {
+	const namespace = (settings as Record<string, unknown>)[RETRY_SETTINGS_KEY];
+	if (namespace !== undefined && !isRecord(namespace)) {
+		warn(`Ignoring invalid ${RETRY_SETTINGS_KEY} settings; expected an object.`);
+	}
+	const values = isRecord(namespace) ? namespace : {};
+	const main = readPolicy(values, DEFAULT_RETRY_POLICY);
+
+	const rawSubagents = values.subagents;
+	if (rawSubagents !== undefined && !isRecord(rawSubagents)) {
+		warn(`Ignoring invalid ${RETRY_SETTINGS_KEY}.subagents value: ${String(rawSubagents)} (expected an object)`);
+	}
+	const subagents = isRecord(rawSubagents) ? rawSubagents : {};
+	return {
+		main,
+		subagents: {
+			...readPolicy(subagents, main, `${RETRY_SETTINGS_KEY}.subagents`),
+			enabled: readBoolean(subagents, "enabled", true, `${RETRY_SETTINGS_KEY}.subagents.enabled`),
+			matchers: compileMatchers(subagents),
+		},
+	};
+}
+
+/** Whether the effective system prompt matches any configured subagent rule. */
+export function matchesSystemPrompt(systemPrompt: string, matchers: readonly RegExp[]): boolean {
+	for (const matcher of matchers) {
+		matcher.lastIndex = 0;
+		const matched = matcher.test(systemPrompt);
+		matcher.lastIndex = 0;
+		if (matched) return true;
+	}
+	return false;
 }
 
 export function calculateDelay(attempt: number, policy: RetryPolicy): number {

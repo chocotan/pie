@@ -9,7 +9,14 @@
 import { isContextOverflow } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 import type { ReadonlySessionManager } from "../../core/session-manager.ts";
-import { calculateDelay, formatDuration, type RetryPolicy, readRetryPolicy } from "./config.ts";
+import {
+	calculateDelay,
+	formatDuration,
+	matchesSystemPrompt,
+	type RetryPolicy,
+	type RetrySettings,
+	readRetrySettings,
+} from "./config.ts";
 import {
 	getErrorCategory,
 	hasEmptyStop,
@@ -48,6 +55,8 @@ interface CategoryState {
 }
 
 export default function retryExtension(pi: ExtensionAPI): void {
+	let resolved: RetrySettings = readRetrySettings({});
+	let usesSubagentPolicy = false;
 	let retryAttempts = 0;
 	let maxDelayRetries = 0;
 	let continuations = 0;
@@ -75,9 +84,37 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	const policy = (): RetryPolicy => readRetryPolicy(pi.getSettings());
 	/** `retry.enabled` is the master switch; the RPC `set_auto_retry` command toggles it. */
 	const autoRetryEnabled = (): boolean => pi.getSettings().retry?.enabled ?? true;
+	/** The policy governing this session: the matched subagent policy, or the main one. */
+	const activePolicy = (): RetryPolicy => (usesSubagentPolicy ? resolved.subagents : resolved.main);
+	/** Whether the plugin retries this session at all. */
+	const ownsRetry = (): boolean => !(usesSubagentPolicy && !resolved.subagents.enabled);
+
+	const readSystemPrompt = (ctx: { getSystemPrompt?: () => string }): string => {
+		try {
+			return typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : "";
+		} catch {
+			return "";
+		}
+	};
+
+	/**
+	 * Resolve the policy for this session from its effective system prompt and
+	 * apply retry ownership. A session selected by the subagent matchers may opt
+	 * out with `subagents.enabled: false`, which leaves the built-in scheduler
+	 * untouched.
+	 */
+	const resolveSession = (systemPrompt: string) => {
+		const next = readRetrySettings(pi.getSettings());
+		const matched = matchesSystemPrompt(systemPrompt, next.subagents.matchers);
+		resolved = next;
+		usesSubagentPolicy = matched;
+		// Take over retry unless the matched subagent policy explicitly opts out.
+		const takesOver = !(matched && !next.subagents.enabled);
+		pi.setNativeRetryEnabled(!takesOver);
+	};
+
 	const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error") =>
 		ctx.ui.notify(message, level);
 	const setStatus = (ctx: ExtensionContext, text: string | undefined) => {
@@ -121,13 +158,15 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	pi.on("session_start", () => {
-		// The plugin owns agent-turn retry while it is loaded, so the built-in
-		// scheduler must not run a second backoff over the same failure. Provider
-		// request retries and compaction retries are unaffected.
-		pi.setNativeRetryEnabled(false);
+	pi.on("session_start", (_event, ctx) => {
+		resolveSession(readSystemPrompt(ctx));
 		generation++;
 		resetCounters();
+	});
+
+	// The effective prompt is known per run, and settings may change between runs.
+	pi.on("before_agent_start", (event) => {
+		resolveSession(event.systemPrompt);
 	});
 
 	pi.on("session_shutdown", () => {
@@ -143,9 +182,11 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		if (!isErrorStop(assistant) && !hasMaxTokensStop(assistant) && !hasEmptyStop(assistant)) return undefined;
 
 		const own = generation;
-		const settings = policy();
+		const settings = activePolicy();
 		const drafts = [...(event.entries ?? [])];
 
+		// A matched session may keep the built-in scheduler; it then owns retry.
+		if (!ownsRetry()) return undefined;
 		// Automatic retry is off: `retry.enabled` or the RPC set_auto_retry command.
 		// This gates retries, continuations, and empty-response nudges alike.
 		if (!autoRetryEnabled()) return undefined;
@@ -235,12 +276,23 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		if (!(await backoff(ctx, delay, retryAttempts, own))) return undefined;
 		if (generation !== own) return undefined;
 
-		// Omit the failed response from the model projection so the same request
-		// is sent again. The raw history keeps it, exactly like native retry.
-		const failed = event.context.contextEntries.findLast((entry) => entry.messages.includes(assistant))?.sourceEntry
-			.id;
-		if (!failed) return undefined;
-		drafts.push({ type: "context_edit", targetId: failed, replacement: null });
+		if (settings.messageFreeRetries) {
+			// Omit the failed response from the model projection so the same request
+			// is sent again. The raw history keeps it, exactly like native retry.
+			const failed = event.context.contextEntries.findLast((entry) => entry.messages.includes(assistant))
+				?.sourceEntry.id;
+			if (!failed) return undefined;
+			drafts.push({ type: "context_edit", targetId: failed, replacement: null });
+		} else {
+			// Upstream's default: one hidden retry message stays in the context and
+			// the session file, and the failed response stays in the transcript.
+			drafts.push({
+				type: "custom_message",
+				customType: RETRY_TRIGGER_CUSTOM_TYPE,
+				content: RETRY_MESSAGE,
+				display: false,
+			});
+		}
 		return { entries: drafts, continue: true };
 	});
 
@@ -262,7 +314,7 @@ export default function retryExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("retry", {
 		description: "Retry controls: /retry, /retry status, /retry reset",
 		async handler(args, ctx) {
-			const settings = policy();
+			const settings = activePolicy();
 			const subcommand = args.trim().split(/\s+/)[0]?.toLowerCase();
 
 			if (subcommand === "status") {
@@ -270,7 +322,11 @@ export default function retryExtension(pi: ExtensionAPI): void {
 				const lines = [
 					"=== Pie retry status ===",
 					`Automatic retry: ${autoRetryEnabled() ? "on" : "off"} (retry.enabled; RPC set_auto_retry)`,
-					`Owns agent-turn retry: yes (built-in scheduler suppressed while loaded)`,
+					`Policy: ${usesSubagentPolicy ? "subagent matcher" : "main"}${
+						usesSubagentPolicy && !resolved.subagents.enabled ? " (takeover disabled)" : ""
+					}`,
+					`Owns agent-turn retry: ${ownsRetry() ? "yes" : "no"}`,
+					`Retry mode: ${settings.messageFreeRetries ? "message-free (omit failed response)" : "hidden retry message"}`,
 					`Retries: ${retryAttempts} total, ${maxDelayRetries}/${settings.maxRetriesAtMaxDelay} at max delay`,
 					`Output continuations: ${continuations}/${settings.maxContinuations}`,
 					`Empty-response nudges: ${emptyNudges}/${MAX_EMPTY_NUDGES}`,
@@ -291,6 +347,15 @@ export default function retryExtension(pi: ExtensionAPI): void {
 				finishLifecycle("pie.retry-cancelled");
 				resetCounters();
 				notify(ctx, "Retry counters reset.", "info");
+				return;
+			}
+
+			if (!ownsRetry()) {
+				notify(
+					ctx,
+					"This session keeps the built-in retry scheduler (pieRetry.subagents.enabled is false).",
+					"info",
+				);
 				return;
 			}
 

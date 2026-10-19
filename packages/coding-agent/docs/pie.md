@@ -153,20 +153,30 @@ Configure the schedule under `pieRetry` in `~/.pie/settings.json` (project setti
     "maxRetriesAtMaxDelay": 3,
     "maxContinuations": 10,
     "retryContinuations": true,
-    "retryEmptyStop": true
+    "retryEmptyStop": true,
+    "messageFreeRetries": false,
+    "subagents": {
+      "enabled": true,
+      "maxRetriesAtMaxDelay": 3,
+      "match": { "systemPromptRegex": [{ "pattern": "<active_agent name=\"[^\"]+\"/>", "flags": "" }] }
+    }
   }
 }
 ```
 
 `baseDelayMs` is the first retry delay, `multiplier` grows it, `maxDelayMs` caps it, and `maxRetriesAtMaxDelay` stops the loop after that many failures at the cap. `maxContinuations` bounds output-limit continuations; `retryContinuations` and `retryEmptyStop` disable those two behaviors. Invalid values are ignored with a warning.
 
+`messageFreeRetries` (default false) keeps upstream's one hidden `Retry the previous request.` message. Set it to true to omit the failed response from the model projection with a durable `context_edit` instead, so the provider receives the same request again. The failed attempt stays in the session transcript in both modes.
+
+`subagents.match.systemPromptRegex` selects a separate retry policy for sessions whose effective system prompt matches any rule. Every schedule field above can be overridden under `subagents`, and `subagents.enabled: false` lets a matched session keep Pie's built-in scheduler instead. Omitted fields inherit the main policy, a project matcher list replaces the global one, and an invalid rule is ignored with a warning rather than matching every session.
+
 Permanent failures (invalid key, unknown model) and quota, session-limit, or budget exhaustion are retried like any other error, but their first notice states that the retry cannot succeed until the underlying problem is fixed. `maxRetriesAtMaxDelay` keeps that bounded.
 
-`/retry` retries the last failure manually, `/retry status` prints per-category counters and the effective policy, and `/retry reset` clears them. While a backoff is pending the footer shows the attempt and remaining delay; new input or a session shutdown cancels it.
+`/retry` retries the last failure manually, `/retry status` prints per-category counters, the active policy, and the retry mode, and `/retry reset` clears them. While a backoff is pending the footer shows the attempt and remaining delay; new input or a session shutdown cancels it.
 
-Context overflow is never retried in place: compaction reduces the context and retries once. A retried failure is omitted from the model projection and kept in the session transcript, so the provider receives the same request again.
+Context overflow is never retried in place: compaction reduces the context and retries once. Providers strip a failed assistant turn from the request payload, so in the default mode the retry re-sends the same request with one hidden message; with `messageFreeRetries: true` the failed response is removed from the model projection instead. Either way the failed attempt stays in the session file.
 
-Subagent children do not load built-in extensions and keep Pie's built-in retry with their inherited settings. The port is adapted from [pi-retry](https://github.com/monotykamary/pi-retry) 0.11.2; its [MIT notice and the list of deliberate differences](third-party/pi-retry/NOTICE.md) are included. Disable it with `-builtin:retry` or replace it with another plugin registering `/retry`.
+Subagent children do not load built-in extensions, so the matcher normally selects ordinary sessions; a child created by an extension that itself loads this plugin is matched by its own system prompt. The port is adapted from [pi-retry](https://github.com/monotykamary/pi-retry) 0.11.2; its [MIT notice and the list of deliberate differences](third-party/pi-retry/NOTICE.md) are included. Disable it with `-builtin:retry` or replace it with another plugin registering `/retry`.
 
 ## Background shell jobs
 

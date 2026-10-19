@@ -22,6 +22,10 @@ the port is a rewrite against Pie's public extension API.
 - Auto-continuation when a response stops at the output token limit, and one
   bounded nudge when a turn ends with no usable output.
 - `/retry`, `/retry status`, and `/retry reset`.
+- One hidden `Retry the previous request.` message for an automatic error retry,
+  which is upstream's default retry mode (`messageFreeRetries: false`).
+- `subagents.match.systemPromptRegex`, which selects a separate retry policy for
+  sessions whose effective system prompt matches one of the rules.
 - Category-aware diagnostics and the distinction between per-minute rate
   limits, pay-as-you-go balance errors, and hard quota or budget exhaustion.
 - Single retry ownership: the plugin disables Pie's built-in agent-turn
@@ -46,17 +50,24 @@ the port is a rewrite against Pie's public extension API.
   RPC `set_auto_retry` command that writes it) is the documented way to turn
   automatic retry off. Provider request retries and compaction retries keep
   using `retry.provider.*`.
-- **No hidden retry message for automatic error retries.** The failed response is
-  omitted from the model projection with a durable `context_edit`, so the same
-  request is re-sent. The failed attempt stays in the raw session history, as it
-  does for the built-in retry. Manual `/retry` still uses one hidden message
-  because it starts from idle.
+- **Retry mode is selectable.** The default queues one hidden
+  `Retry the previous request.` message at the settle boundary, as upstream does.
+  `messageFreeRetries: true` instead omits the failed response from the model
+  projection with a durable `context_edit`, so the same request is re-sent. The
+  failed attempt stays in the raw session history in both modes. Manual `/retry`
+  always uses one hidden message because it starts from idle.
 - **Settings live in `pieRetry`, not `piRetry`**, and are read from Pie's merged
   global and project settings (`~/.pie/settings.json`, `.pie/settings.json`).
 - **`maxContinuations` (default 10) caps output-limit continuations.** Upstream
   continues without a limit; a cap avoids an unbounded paid loop.
-- **No subagent matcher.** Pie's built-in subagents run children without built-in
-  extensions, so a system-prompt matcher could never select a child here.
+- **Subagent matcher scope.** `pieRetry.subagents.match.systemPromptRegex`
+  compiles to rules that are tested against the session's effective system
+  prompt. A match switches that session to the subagent policy, which may set
+  its own limits and may opt out of the takeover entirely with
+  `subagents.enabled: false`. Pie's own built-in subagents run children without
+  built-in extensions, so the matcher selects ordinary sessions or children
+  created by extensions that do load this plugin. An invalid rule is ignored
+  with a warning rather than matching every session.
 - **Lifecycle events use Pie names.** Upstream emits `pi-retry:started`,
   `pi-retry:completed`, and `pi-retry:cancelled`; this port emits
   `pie.retry-started`, `pie.retry-completed`, and `pie.retry-cancelled` with the

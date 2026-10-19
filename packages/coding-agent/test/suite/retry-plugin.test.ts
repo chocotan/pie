@@ -1,13 +1,17 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type FauxResponseFactory, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { EventBus } from "../../src/core/event-bus.ts";
 import { builtInExtensions } from "../../src/extensions/index.ts";
 import retryExtension from "../../src/extensions/retry/index.ts";
+import { createTestExtensionsResult, createTestResourceLoader } from "../utilities.ts";
 import { createHarness, createTestUiContext, type Harness } from "./harness.ts";
 
 /** Instant, capped backoff so the plugin's schedule is testable without waiting. */
 const FAST = { baseDelayMs: 0, maxDelayMs: 0, multiplier: 1, maxRetriesAtMaxDelay: 3 };
-/** Keep native retry fast in tests that exercise the hand-over. */
+/** Keep the built-in scheduler fast in tests that exercise the hand-over. */
 const NATIVE_FAST = { baseDelayMs: 1, maxRetries: 3 };
 
 const harnesses: Harness[] = [];
@@ -18,11 +22,27 @@ async function setup(
 		retryEnabled?: boolean;
 		nativeRetry?: Record<string, unknown>;
 		compaction?: boolean;
+		systemPrompt?: string;
 	} = {},
 ) {
 	const notifications: string[] = [];
+	// A custom system prompt needs its own resource loader, so the retry extension
+	// is wired through the same loader the harness would have built.
+	const resourceLoader =
+		options.systemPrompt === undefined
+			? undefined
+			: {
+					...createTestResourceLoader({
+						extensionsResult: await createTestExtensionsResult(
+							[retryExtension],
+							mkdtempSync(join(tmpdir(), "retry-plugin-")),
+						),
+					}),
+					getSystemPrompt: () => options.systemPrompt,
+				};
 	const harness = await createHarness({
-		extensionFactories: [retryExtension],
+		extensionFactories: resourceLoader ? undefined : [retryExtension],
+		resourceLoader,
 		settings: {
 			retry: { enabled: options.retryEnabled ?? true, ...options.nativeRetry },
 			compaction: { enabled: options.compaction ?? false },
@@ -41,6 +61,15 @@ async function setup(
 function afterAllCleanup() {
 	for (const harness of harnesses.splice(0)) harness.cleanup();
 }
+
+const errorResponse = (message: string) => fauxAssistantMessage("", { stopReason: "error", errorMessage: message });
+const hiddenRetryMessages = (harness: Harness) =>
+	harness.sessionManager
+		.getEntries()
+		.filter((entry) => entry.type === "custom_message" && entry.customType === "pie.retry-retry");
+const contextEdits = (harness: Harness) =>
+	harness.sessionManager.getEntries().filter((entry) => entry.type === "context_edit");
+
 describe("retry plugin", () => {
 	it("ships as a replaceable built-in and registers /retry", async () => {
 		expect(builtInExtensions.find((extension) => extension.name === "retry")).toMatchObject({
@@ -58,46 +87,54 @@ describe("retry plugin", () => {
 		}
 	});
 
-	it("retries an unknown provider error and omits the failed response from the model context", async () => {
-		const requests: string[] = [];
-		const first: FauxResponseFactory = (context) => {
-			requests.push(JSON.stringify(context.messages));
-			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "mystery provider failure" });
-		};
-		const second: FauxResponseFactory = (context) => {
-			requests.push(JSON.stringify(context.messages));
-			return fauxAssistantMessage("recovered");
-		};
-		const { harness, notifications } = await setup([first, second]);
+	it("retries an unknown provider error with a hidden retry message by default", async () => {
+		const { harness, notifications } = await setup([
+			errorResponse("mystery provider failure"),
+			fauxAssistantMessage("recovered"),
+		]);
 		try {
 			await harness.session.prompt("do the thing");
 			expect(harness.faux.state.callCount).toBe(2);
 			expect(harness.session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
-			// The retry re-asks the same request; the failed attempt is never sent.
-			expect(requests[1]).not.toContain("mystery provider failure");
-			expect(requests[1]).toContain("do the thing");
-			// The failed attempt stays in raw history for the transcript.
+			// Upstream default: one hidden retry message stays in the context, and the
+			// failed response stays in the transcript.
+			expect(hiddenRetryMessages(harness)).toHaveLength(1);
+			expect(hiddenRetryMessages(harness)[0]).toMatchObject({
+				display: false,
+				content: "Retry the previous request.",
+			});
+			expect(contextEdits(harness)).toHaveLength(0);
 			expect(JSON.stringify(harness.sessionManager.getEntries())).toContain("mystery provider failure");
-			expect(
-				harness.sessionManager
-					.getEntries()
-					.some((entry) => entry.type === "context_edit" && entry.replacement === null),
-			).toBe(true);
 			expect(notifications.some((message) => message.includes("Retrying after an error"))).toBe(true);
+		} finally {
 			afterAllCleanup();
+		}
+	});
+
+	it("omits the failed response instead when messageFreeRetries is enabled", async () => {
+		const { harness } = await setup([errorResponse("mystery provider failure"), fauxAssistantMessage("recovered")], {
+			pieRetry: { ...FAST, messageFreeRetries: true },
+		});
+		try {
+			await harness.session.prompt("do the thing");
+			expect(harness.faux.state.callCount).toBe(2);
+			expect(hiddenRetryMessages(harness)).toHaveLength(0);
+			expect(contextEdits(harness)).toHaveLength(1);
+			// The failed attempt stays in raw history but leaves the model projection.
+			expect(JSON.stringify(harness.sessionManager.getEntries())).toContain("mystery provider failure");
+			expect(JSON.stringify(harness.session.messages)).not.toContain("mystery provider failure");
 		} finally {
 			afterAllCleanup();
 		}
 	});
 
 	it("defers context overflow but retries permanent and quota errors", async () => {
-		const overflow = await setup([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "prompt is too long: 300000 tokens" }),
-		]);
+		const overflow = await setup([errorResponse("prompt is too long: 300000 tokens")]);
 		await overflow.harness.session.prompt("do the thing");
 		expect(overflow.harness.faux.state.callCount).toBe(1);
 		expect(overflow.notifications.some((message) => message.includes("Context overflow"))).toBe(true);
-		expect(overflow.harness.sessionManager.getEntries().some((entry) => entry.type === "context_edit")).toBe(false);
+		expect(contextEdits(overflow.harness)).toHaveLength(0);
+		expect(hiddenRetryMessages(overflow.harness)).toHaveLength(0);
 		afterAllCleanup();
 
 		// Permanent-looking and quota errors are retried too, with a notice that the
@@ -106,10 +143,7 @@ describe("retry plugin", () => {
 			["invalid api key provided", "looks permanent"],
 			["You have hit your limit · resets 4pm", "Quota or budget is exhausted"],
 		] as const) {
-			const retried = await setup([
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: message }),
-				fauxAssistantMessage("recovered"),
-			]);
+			const retried = await setup([errorResponse(message), fauxAssistantMessage("recovered")]);
 			await retried.harness.session.prompt("do the thing");
 			expect(retried.harness.faux.state.callCount).toBe(2);
 			expect(retried.notifications.some((text) => text.includes(notice))).toBe(true);
@@ -156,10 +190,10 @@ describe("retry plugin", () => {
 
 	it("gives up after the configured number of retries at the maximum delay", async () => {
 		const { harness, notifications } = await setup([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
+			errorResponse("connection reset by peer"),
+			errorResponse("connection reset by peer"),
+			errorResponse("connection reset by peer"),
+			errorResponse("connection reset by peer"),
 		]);
 		await harness.session.prompt("do the thing");
 		expect(harness.faux.state.callCount).toBe(4);
@@ -172,8 +206,8 @@ describe("retry plugin", () => {
 	it("honors a smaller retry budget", async () => {
 		const capped = await setup(
 			[
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
+				errorResponse("connection reset by peer"),
+				errorResponse("connection reset by peer"),
 				fauxAssistantMessage("should not be requested"),
 			],
 			{ pieRetry: { ...FAST, maxRetriesAtMaxDelay: 1 } },
@@ -198,10 +232,7 @@ describe("retry plugin", () => {
 
 		// The catch-all error retry stays available; only continuations are optional.
 		const error = await setup(
-			[
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
-				fauxAssistantMessage("recovered"),
-			],
+			[errorResponse("connection reset by peer"), fauxAssistantMessage("recovered")],
 			settings,
 		);
 		await error.harness.session.prompt("do the thing");
@@ -213,11 +244,10 @@ describe("retry plugin", () => {
 		// `overloaded_error` is an error the built-in scheduler classifies. With the
 		// plugin loaded it owns the retry, so no built-in attempt is scheduled.
 		const builtinClassified = await setup(
-			[
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-				fauxAssistantMessage("plugin retry recovered"),
-			],
-			{ retryEnabled: true, nativeRetry: NATIVE_FAST },
+			[errorResponse("overloaded_error"), fauxAssistantMessage("plugin retry recovered")],
+			{
+				nativeRetry: NATIVE_FAST,
+			},
 		);
 		await builtinClassified.harness.session.prompt("do the thing");
 		expect(builtinClassified.harness.faux.state.callCount).toBe(2);
@@ -225,18 +255,15 @@ describe("retry plugin", () => {
 		expect(builtinClassified.notifications.some((message) => message.includes("Retrying after a server error"))).toBe(
 			true,
 		);
-		expect(builtinClassified.harness.sessionManager.getEntries().some((entry) => entry.type === "context_edit")).toBe(
-			true,
-		);
+		expect(hiddenRetryMessages(builtinClassified.harness)).toHaveLength(1);
 		afterAllCleanup();
 
 		// An error the built-in scheduler does not classify is retried as well.
 		const unknown = await setup(
-			[
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "mystery provider failure" }),
-				fauxAssistantMessage("plugin retry recovered"),
-			],
-			{ retryEnabled: true },
+			[errorResponse("mystery provider failure"), fauxAssistantMessage("plugin retry recovered")],
+			{
+				nativeRetry: NATIVE_FAST,
+			},
 		);
 		await unknown.harness.session.prompt("do the thing");
 		expect(unknown.harness.faux.state.callCount).toBe(2);
@@ -247,11 +274,10 @@ describe("retry plugin", () => {
 
 	it("stops retrying when automatic retry is switched off", async () => {
 		const { harness, notifications } = await setup(
-			[
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-				fauxAssistantMessage("should not be requested"),
-			],
-			{ retryEnabled: false },
+			[errorResponse("overloaded_error"), fauxAssistantMessage("should not be requested")],
+			{
+				retryEnabled: false,
+			},
 		);
 		await harness.session.prompt("do the thing");
 		expect(harness.faux.state.callCount).toBe(1);
@@ -260,9 +286,8 @@ describe("retry plugin", () => {
 	});
 
 	it("gives up on a persistent error with the plugin's own cap", async () => {
-		const failing = () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" });
+		const failing = () => errorResponse("overloaded_error");
 		const { harness, notifications } = await setup([failing(), failing(), failing(), failing()], {
-			retryEnabled: true,
 			nativeRetry: NATIVE_FAST,
 			pieRetry: { ...FAST, maxRetriesAtMaxDelay: 1 },
 		});
@@ -276,11 +301,96 @@ describe("retry plugin", () => {
 		afterAllCleanup();
 	});
 
+	it("uses the subagent policy for a session whose system prompt matches", async () => {
+		const marker = '<active_agent name="worker"/>';
+		const pieRetry = {
+			...FAST,
+			subagents: {
+				maxRetriesAtMaxDelay: 1,
+				match: { systemPromptRegex: [{ pattern: '<active_agent name="[^"]+"/>' }] },
+			},
+		};
+		const responses = () => [
+			errorResponse("overloaded_error"),
+			errorResponse("overloaded_error"),
+			errorResponse("overloaded_error"),
+			errorResponse("overloaded_error"),
+		];
+
+		// The child policy caps retries at 1, so only one retry runs.
+		const matched = await setup(responses(), { pieRetry, systemPrompt: marker });
+		await matched.harness.session.prompt("do the thing");
+		await matched.harness.session.extensionRunner
+			.getCommand("retry")!
+			.handler("status", matched.harness.session.extensionRunner.createCommandContext());
+		expect(matched.notifications.join("\n---\n")).toContain("Policy: subagent matcher");
+		expect(matched.harness.faux.state.callCount).toBe(2);
+		expect(matched.notifications.some((message) => message.includes("Retry failed 1 times"))).toBe(true);
+		afterAllCleanup();
+
+		// Without the marker the main policy applies and retries up to its own cap.
+		const unmatched = await setup(responses(), { pieRetry, systemPrompt: "ordinary session prompt" });
+		await unmatched.harness.session.prompt("do the thing");
+		expect(unmatched.harness.faux.state.callCount).toBe(4);
+		afterAllCleanup();
+	});
+
+	it("leaves the built-in scheduler alone for a matched session that opts out", async () => {
+		const { harness, notifications } = await setup(
+			[errorResponse("overloaded_error"), fauxAssistantMessage("built-in retry recovered")],
+			{
+				nativeRetry: NATIVE_FAST,
+				systemPrompt: '<active_agent name="worker"/>',
+				pieRetry: {
+					...FAST,
+					subagents: {
+						enabled: false,
+						match: { systemPromptRegex: [{ pattern: '<active_agent name="[^"]+"/>' }] },
+					},
+				},
+			},
+		);
+		await harness.session.prompt("do the thing");
+		expect(harness.eventsOfType("auto_retry_start")).toHaveLength(1);
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(notifications.some((message) => message.includes("Retrying after"))).toBe(false);
+		afterAllCleanup();
+	});
+
+	it("ignores a malformed matcher instead of selecting every session", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const { harness, notifications } = await setup(
+				[
+					errorResponse("overloaded_error"),
+					errorResponse("overloaded_error"),
+					errorResponse("overloaded_error"),
+					errorResponse("overloaded_error"),
+				],
+				{
+					systemPrompt: '<active_agent name="worker"/>',
+					pieRetry: {
+						...FAST,
+						subagents: { maxRetriesAtMaxDelay: 1, match: { systemPromptRegex: [{ pattern: "(" }] } },
+					},
+				},
+			);
+			await harness.session.prompt("do the thing");
+			// The invalid rule matches nothing, so the main policy retried to its cap.
+			expect(harness.faux.state.callCount).toBe(4);
+			expect(warn.mock.calls.some(([message]) => String(message).includes("Ignoring invalid"))).toBe(true);
+			expect(notifications.some((message) => message.includes("Retry failed 3 times"))).toBe(true);
+		} finally {
+			warn.mockRestore();
+			afterAllCleanup();
+		}
+	});
+
 	it("reports status, resets counters, and retries manually with one hidden message", async () => {
 		const { harness, notifications } = await setup(
 			[
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
+				errorResponse("connection reset by peer"),
+				errorResponse("connection reset by peer"),
 				fauxAssistantMessage("after manual retry"),
 			],
 			{ pieRetry: { ...FAST, maxRetriesAtMaxDelay: 1 } },
@@ -296,6 +406,8 @@ describe("retry plugin", () => {
 			await command.handler("status", ctx);
 			expect(notifications.some((message) => message.includes("=== Pie retry status ==="))).toBe(true);
 			expect(notifications.some((message) => message.includes("Owns agent-turn retry: yes"))).toBe(true);
+			expect(notifications.some((message) => message.includes("Policy: main"))).toBe(true);
+			expect(notifications.some((message) => message.includes("Retry mode: hidden retry message"))).toBe(true);
 
 			await command.handler("reset", ctx);
 			expect(notifications.some((message) => message.includes("Retry counters reset"))).toBe(true);
@@ -328,17 +440,13 @@ describe("retry plugin", () => {
 			for (const name of ["pie.retry-started", "pie.retry-completed", "pie.retry-cancelled"])
 				bus?.on(name, () => seen.push(name));
 
-			harness.setResponses([
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
-				fauxAssistantMessage("recovered"),
-			]);
+			harness.setResponses([errorResponse("connection reset by peer"), fauxAssistantMessage("recovered")]);
 			await harness.session.prompt("do the thing");
 			expect(seen).toEqual(["pie.retry-started", "pie.retry-completed"]);
 
 			// A persistent error closes its lifecycle instead of leaving it open.
 			seen.length = 0;
-			const failing = () =>
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" });
+			const failing = () => errorResponse("connection reset by peer");
 			harness.setResponses([failing(), failing(), failing(), failing()]);
 			await harness.session.prompt("do the thing again");
 			expect(seen).toEqual(["pie.retry-started", "pie.retry-cancelled"]);
@@ -355,8 +463,8 @@ describe("retry plugin", () => {
 		try {
 			await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext() });
 			harness.setResponses([
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+				errorResponse("overloaded_error"),
+				errorResponse("overloaded_error"),
 				fauxAssistantMessage("recovered"),
 			]);
 			harness.session.setNativeRetryEnabled(false);
@@ -377,8 +485,7 @@ describe("retry plugin", () => {
 
 	it("cancels a pending backoff when new input arrives", async () => {
 		const statuses: string[] = [];
-		const slow: FauxResponseFactory = () =>
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "fetch failed" });
+		const slow: FauxResponseFactory = () => errorResponse("fetch failed");
 		const harness = await createHarness({
 			extensionFactories: [retryExtension],
 			settings: {
@@ -403,8 +510,9 @@ describe("retry plugin", () => {
 			await vi.waitFor(() => expect(statuses.some((text) => text.includes("retry 1 in"))).toBe(true));
 			await harness.session.prompt("stop that", { streamingBehavior: "followUp" });
 			await prompt;
-			// The queued input superseded the retry, so no omitted response and no second request.
-			expect(harness.sessionManager.getEntries().some((entry) => entry.type === "context_edit")).toBe(false);
+			// The queued input superseded the retry, so nothing was queued for it.
+			expect(hiddenRetryMessages(harness)).toHaveLength(0);
+			expect(contextEdits(harness)).toHaveLength(0);
 			expect(harness.faux.state.callCount).toBe(2);
 			expect(JSON.stringify(harness.session.messages)).toContain("stop that");
 		} finally {
