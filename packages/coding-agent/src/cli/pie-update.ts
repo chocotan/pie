@@ -22,7 +22,7 @@ export function runPieUpdate(
 	const updater = existsSync(managed) ? managed : existsSync(source) ? source : undefined;
 	if (!updater) {
 		console.error(
-			"No managed Pie updater was found. Run: curl -fsSL https://raw.githubusercontent.com/chocotan/pi/main/scripts/install.sh | bash",
+			"No managed Pie updater was found. Run: curl -fsSL https://raw.githubusercontent.com/chocotan/pie/main/scripts/install.sh | bash",
 		);
 		return 1;
 	}

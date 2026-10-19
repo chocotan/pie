@@ -35,7 +35,7 @@ describe("Pie version checks", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		await expect(checkForNewPiVersion("0.1.0")).resolves.toEqual({ version: "0.2.0" });
 		expect(fetchMock).toHaveBeenCalledWith(
-			"https://raw.githubusercontent.com/chocotan/pi/main/packages/coding-agent/package.json",
+			"https://raw.githubusercontent.com/chocotan/pie/main/packages/coding-agent/package.json",
 			expect.objectContaining({ headers: expect.objectContaining({ "User-Agent": "pie/0.1.0" }) }),
 		);
 		await expect(checkForNewPiVersion("0.2.0")).resolves.toBeUndefined();

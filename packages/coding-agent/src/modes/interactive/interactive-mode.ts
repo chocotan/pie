@@ -4699,7 +4699,7 @@ export class InteractiveMode {
 		const updateInstruction = () =>
 			theme.fg("muted", `New version ${release.version} is available. Run `) +
 			theme.fg("accent", `${APP_NAME} update`);
-		const changelogUrl = "https://github.com/chocotan/pi/blob/main/packages/coding-agent/PIE_CHANGELOG.md";
+		const changelogUrl = "https://github.com/chocotan/pie/blob/main/packages/coding-agent/PIE_CHANGELOG.md";
 		const changelogLine = () => {
 			const changelogLink = getCapabilities().hyperlinks
 				? hyperlink(theme.fg("accent", changelogUrl), changelogUrl)

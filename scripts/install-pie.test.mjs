@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { installPie } from "./install-pie.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const repository = "https://github.com/chocotan/pi.git";
+const repository = "https://github.com/chocotan/pie.git";
 const branch = "main";
 const firstCommit = "a".repeat(40);
 const nextCommit = "b".repeat(40);
@@ -265,7 +265,7 @@ writeFileSync(args[args.indexOf('--output') + 1], '// downloaded installer');
 		assert.equal(remote.status, 0, remote.stderr);
 		const commands = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
 		assert.equal(commands[0].command, "curl");
-		assert.ok(commands[0].args.includes("https://raw.githubusercontent.com/chocotan/pi/main/scripts/install-pie.mjs"));
+		assert.ok(commands[0].args.includes("https://raw.githubusercontent.com/chocotan/pie/main/scripts/install-pie.mjs"));
 		assert.ok(commands[0].args.includes("--fail"));
 		assert.equal(commands[1].command, "node");
 		assert.equal(commands[1].downloaded, true);

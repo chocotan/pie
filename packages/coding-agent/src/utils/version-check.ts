@@ -2,7 +2,7 @@ import { compare, valid } from "semver";
 import { APP_NAME } from "../config.ts";
 import { fetchWithRetry } from "./management-http.ts";
 
-const LATEST_VERSION_URL = "https://raw.githubusercontent.com/chocotan/pi/main/packages/coding-agent/package.json";
+const LATEST_VERSION_URL = "https://raw.githubusercontent.com/chocotan/pie/main/packages/coding-agent/package.json";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {

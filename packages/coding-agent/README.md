@@ -6,7 +6,7 @@ The CLI command is `pie`. Global configuration lives directly in `~/.pie`, and p
 
 The Pie product version is tracked in `piConfig.version`; upstream SDK/npm package versions and `@earendil-works/*` import names remain independent. This source checkout ships the Pie CLI, not the upstream Pi installer.
 
-See the [Pie project README](https://github.com/chocotan/pi/blob/main/README.md) for installation and updates, [Pie features](docs/pie.md) for workflow settings, and the [documentation index](docs/index.md) for SDK and extension APIs.
+See the [Pie project README](https://github.com/chocotan/pie/blob/main/README.md) for installation and updates, [Pie features](docs/pie.md) for workflow settings, and the [documentation index](docs/index.md) for SDK and extension APIs.
 
 ## Attribution
 

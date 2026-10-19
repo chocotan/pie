@@ -10,7 +10,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-const repository = "https://github.com/chocotan/pi.git";
+const repository = "https://github.com/chocotan/pie.git";
 const defaultRef = "main";
 const packageName = "@earendil-works/pi-coding-agent";
 

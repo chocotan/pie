@@ -2,7 +2,7 @@
 
 Pie is a source fork of [Pi](https://github.com/earendil-works/pi), originally created by **Mario Zechner**. It keeps Pi's extensible agent runtime and adds built-in task tracking, isolated subagents, background shell jobs, structured user questions, a usage dashboard, and a single-pane terminal interface with floating panels.
 
-Its product version is independent of upstream SDK package versions. This fork lives at [chocotan/pi](https://github.com/chocotan/pi). Its command is `pie`, its global configuration directory is `~/.pie`, and project configuration lives in `.pie`. The original MIT license and attribution are preserved in [LICENSE](LICENSE).
+Its product version is independent of upstream SDK package versions. This fork lives at [chocotan/pie](https://github.com/chocotan/pie). Its command is `pie`, its global configuration directory is `~/.pie`, and project configuration lives in `.pie`. The original MIT license and attribution are preserved in [LICENSE](LICENSE).
 
 ## What Pie adds
 
@@ -24,14 +24,14 @@ See [Pie features and configuration](packages/coding-agent/docs/pie.md) for plug
 Install Pie on Linux or macOS with Node.js 22.19+ and Git:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chocotan/pi/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chocotan/pie/main/scripts/install.sh | bash
 ```
 
 Or install from a Git checkout:
 
 ```bash
-git clone --branch main https://github.com/chocotan/pi.git
-cd pi
+git clone --branch main https://github.com/chocotan/pie.git
+cd pie
 ./scripts/install.sh --local
 ```
 
@@ -40,7 +40,7 @@ The installer keeps a managed checkout in `~/.pie/source`, versioned runtimes in
 Update the installed application with `pie update`, or:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chocotan/pi/main/scripts/update.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chocotan/pie/main/scripts/update.sh | bash
 ```
 
 Git checkouts can also run `./scripts/update.sh`. New installations track `main`. Updates require a clean managed checkout and fast-forward its recorded branch; existing installations keep their recorded branch, and prior runtimes remain available if a build fails. Use `--bin-dir` or `PIE_INSTALL_BIN_DIR` to choose the launcher directory and `PIE_CODING_AGENT_DIR` to choose a separate installation/configuration root. Windows users can run Pie from source or a local npm consumer as described below; these shell installers target Linux/macOS.
@@ -50,8 +50,8 @@ Git checkouts can also run `./scripts/update.sh`. New installations track `main`
 Use Node.js **22.19 or newer**. Clone this fork and check out the branch or revision you intend to use:
 
 ```bash
-git clone --branch main https://github.com/chocotan/pi.git
-cd pi
+git clone --branch main https://github.com/chocotan/pie.git
+cd pie
 npm install --ignore-scripts
 ./pi-test.sh
 ```
@@ -62,7 +62,7 @@ To work in another directory, invoke the script by its absolute path from that d
 
 ```bash
 cd /path/to/project
-/path/to/pi/pi-test.sh
+/path/to/pie/pi-test.sh
 ```
 
 Inside Pie, run `/login` to connect a supported subscription or API key, then `/model` to choose a model. Give Pie a task in the conversation.
@@ -171,6 +171,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) for contributo
 
 ## Attribution and license
 
-Pie builds on [Pi by Mario Zechner and its contributors](https://github.com/earendil-works/pi). Upstream project information is available at [pi.dev](https://pi.dev). The fork's changes are maintained in [chocotan/pi](https://github.com/chocotan/pi).
+Pie builds on [Pi by Mario Zechner and its contributors](https://github.com/earendil-works/pi). Upstream project information is available at [pi.dev](https://pi.dev). The fork's changes are maintained in [chocotan/pie](https://github.com/chocotan/pie).
 
 Licensed under [MIT](LICENSE). The original license remains unchanged. Bundled ports retain their own notices: [rpiv-ask-user-question](packages/coding-agent/docs/third-party/rpiv-ask-user-question-LICENSE), [pi-usage (MIT)](packages/coding-agent/docs/third-party/pi-usage/NOTICE.md), and [pi-background-tasks (ISC)](packages/coding-agent/docs/third-party/pi-background-tasks/NOTICE.md).

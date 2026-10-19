@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Installation, updates, release metadata and project links now use the renamed `chocotan/pie` GitHub repository.
 - Todo and Subagents sort running work first and completed work last, show at most ten entries, and remove the oldest successful completions above ten records while preserving unfinished work.
 
 ## [0.1.1]
