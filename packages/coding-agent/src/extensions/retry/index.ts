@@ -94,6 +94,12 @@ export default function retryExtension(pi: ExtensionAPI): void {
 			// A replaced session invalidates the bus while a retry unwinds.
 		}
 	};
+	/** Close the current retry lifecycle exactly once, matching upstream's started/completed/cancelled contract. */
+	const finishLifecycle = (event: "pie.retry-completed" | "pie.retry-cancelled") => {
+		if (lifecycleId === 0) return;
+		emitLifecycle(event, lifecycleId);
+		lifecycleId = 0;
+	};
 
 	/**
 	 * Wait out the backoff in slices so new input or a session shutdown cancels
@@ -127,6 +133,7 @@ export default function retryExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", () => {
 		pi.setNativeRetryEnabled(true);
 		generation++;
+		finishLifecycle("pie.retry-cancelled");
 		resetCounters();
 	});
 
@@ -199,6 +206,7 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		}
 
 		if (maxDelayRetries >= settings.maxRetriesAtMaxDelay) {
+			finishLifecycle("pie.retry-cancelled");
 			notify(
 				ctx,
 				`Retry failed ${settings.maxRetriesAtMaxDelay} times at the maximum backoff (${formatDuration(settings.maxDelayMs)}) — giving up.`,
@@ -241,13 +249,13 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		if (message.role !== "assistant") return;
 		if (message.stopReason === "error" || message.stopReason === "length") return;
 		if (hasEmptyStop(message)) return;
-		if (lifecycleId > 0) emitLifecycle("pie.retry-completed", lifecycleId);
+		finishLifecycle("pie.retry-completed");
 		resetCounters();
 	});
 
 	pi.on("input", () => {
 		generation++;
-		if (lifecycleId > 0) emitLifecycle("pie.retry-cancelled", lifecycleId);
+		finishLifecycle("pie.retry-cancelled");
 		resetCounters();
 	});
 
@@ -280,6 +288,7 @@ export default function retryExtension(pi: ExtensionAPI): void {
 
 			if (subcommand === "reset") {
 				generation++;
+				finishLifecycle("pie.retry-cancelled");
 				resetCounters();
 				notify(ctx, "Retry counters reset.", "info");
 				return;
@@ -311,6 +320,7 @@ export default function retryExtension(pi: ExtensionAPI): void {
 			// Manual retries start from idle, where only a queued message can
 			// continue the run, so they always use one hidden message.
 			generation++;
+			finishLifecycle("pie.retry-cancelled");
 			resetCounters();
 			notify(ctx, "Retrying now…", "info");
 			pi.sendMessage(

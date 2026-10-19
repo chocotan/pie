@@ -1,5 +1,6 @@
 import { type FauxResponseFactory, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import type { EventBus } from "../../src/core/event-bus.ts";
 import { builtInExtensions } from "../../src/extensions/index.ts";
 import retryExtension from "../../src/extensions/retry/index.ts";
 import { createHarness, createTestUiContext, type Harness } from "./harness.ts";
@@ -304,6 +305,43 @@ describe("retry plugin", () => {
 			await harness.session.waitForIdle();
 			expect(harness.faux.state.callCount).toBe(3);
 			expect(harness.session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+		} finally {
+			afterAllCleanup();
+		}
+	});
+
+	it("emits a retry lifecycle on the extension event bus", async () => {
+		const seen: string[] = [];
+		let bus: EventBus | undefined;
+		const harness = await createHarness({
+			extensionFactories: [
+				retryExtension,
+				(pi) => {
+					bus = pi.events;
+				},
+			],
+			settings: { retry: { enabled: true }, compaction: { enabled: false }, pieRetry: FAST } as never,
+		});
+		harnesses.push(harness);
+		try {
+			await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext() });
+			for (const name of ["pie.retry-started", "pie.retry-completed", "pie.retry-cancelled"])
+				bus?.on(name, () => seen.push(name));
+
+			harness.setResponses([
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" }),
+				fauxAssistantMessage("recovered"),
+			]);
+			await harness.session.prompt("do the thing");
+			expect(seen).toEqual(["pie.retry-started", "pie.retry-completed"]);
+
+			// A persistent error closes its lifecycle instead of leaving it open.
+			seen.length = 0;
+			const failing = () =>
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "connection reset by peer" });
+			harness.setResponses([failing(), failing(), failing(), failing()]);
+			await harness.session.prompt("do the thing again");
+			expect(seen).toEqual(["pie.retry-started", "pie.retry-cancelled"]);
 		} finally {
 			afterAllCleanup();
 		}
