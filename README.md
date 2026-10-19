@@ -14,7 +14,7 @@ Its product version is independent of upstream SDK package versions. This fork l
 - **Ponytail built in:** `/ponytail lite|full|ultra|off`, with review, audit, debt, gain and help skills, adapted from [Dietrich Gebert's Ponytail](https://github.com/DietrichGebert/ponytail) under MIT. Disable the plugin with `-builtin:ponytail`.
 - **Usage dashboard:** `/usage [day|week|month|total|cal]` shows recorded tokens and costs by provider/model, with period navigation and a calendar. Adapted from [pi-usage](https://github.com/chocotan/pi-usage) under MIT.
 - **Background shell jobs:** `bg_run`, `bg_status`, `bg_logs` and `bg_kill` run commands without blocking the conversation, retain bounded logs, and report completion. Jobs appear in the shared floating-panel stack. Adapted from [pi-background-tasks](https://github.com/ismailsaleekh/pi-background-tasks) under ISC.
-- **Catch-all retry:** the built-in `retry` plugin retries errors Pie's native retry declines, continues truncated responses, and adds `/retry`, `/retry status`, and `/retry reset`. Adapted from [pi-retry](https://github.com/monotykamary/pi-retry) under MIT.
+- **Catch-all retry:** the built-in `retry` plugin owns automatic retry, retrying every failed turn except context overflow, continuing truncated responses, and adding `/retry`, `/retry status`, and `/retry reset`. Adapted from [pi-retry](https://github.com/monotykamary/pi-retry) under MIT.
 - **Single-line session footer:** folder, branch, usage totals, model and thinking level share one row; narrow windows shorten secondary information.
 - **Provider configuration:** use `/login` and `/model` for supported providers, or configure compatible endpoints and local models in `~/.pie/models.json`.
 

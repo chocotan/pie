@@ -412,6 +412,12 @@ export class AgentSession {
 	private _retryAbortController: AbortController | undefined = undefined;
 	private _retryAttempt = 0;
 	/**
+	 * Whether the built-in agent-turn retry scheduler may run. A plugin that owns
+	 * retry disables it through `pi.setNativeRetryEnabled(false)` so a failure has
+	 * exactly one backoff schedule.
+	 */
+	private _nativeRetryEnabled = true;
+	/**
 	 * Failed response that the next request repeats, set by auto-retry and overflow recovery. The
 	 * retry is routed with it as `failed`, since the context no longer contains it.
 	 */
@@ -1200,7 +1206,7 @@ export class AgentSession {
 	};
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
-		if (this._agentRunAbortRequested) return false;
+		if (this._agentRunAbortRequested || !this._nativeRetryEnabled) return false;
 		const settings = this.settingsManager.getRetrySettings();
 		if (!settings.enabled || this._retryAttempt >= settings.maxRetries) {
 			return false;
@@ -3453,6 +3459,7 @@ export class AgentSession {
 				getAllTools: () => this.getAllTools(),
 				getSettings: () => this.settingsManager.getSettings(),
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
+				setNativeRetryEnabled: (enabled) => this.setNativeRetryEnabled(enabled),
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
 				setModel: async (model) => {
@@ -3790,6 +3797,7 @@ export class AgentSession {
 	 * @returns true if the caller should continue the agent, false otherwise
 	 */
 	private async _prepareRetry(message: AssistantMessage): Promise<boolean> {
+		if (!this._nativeRetryEnabled) return false;
 		const settings = this.settingsManager.getRetrySettings();
 		if (!settings.enabled) {
 			return false;
@@ -3841,6 +3849,14 @@ export class AgentSession {
 	/** Whether auto-retry is currently in progress */
 	get isRetrying(): boolean {
 		return this._retryAbortController !== undefined;
+	}
+
+	/**
+	 * Enable or disable the built-in agent-turn retry scheduler for this session.
+	 * Provider-level request retries and compaction retries are unaffected.
+	 */
+	setNativeRetryEnabled(enabled: boolean): void {
+		this._nativeRetryEnabled = enabled;
 	}
 
 	/** Whether auto-retry is enabled */

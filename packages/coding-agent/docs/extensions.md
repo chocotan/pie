@@ -162,6 +162,7 @@ Use `agent_before_settle` when an extension must append entries or request one f
 | Send user or custom messages | `pi.sendUserMessage()` or `pi.sendMessage()` |
 | Persist non-context session data | `pi.appendEntry()` |
 | Change active tools, model, or thinking level | Session control methods on `pi` |
+| Own automatic retry | `pi.setNativeRetryEnabled(false)` |
 | Add a model provider | `pi.registerProvider()` |
 | Add an MCP server | `pi.registerMcpServer()` |
 | Route each request to a model | [`pi.registerVirtualModel()`](virtual-models.md) |

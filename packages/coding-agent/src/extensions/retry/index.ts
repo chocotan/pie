@@ -2,11 +2,11 @@
 // Source: https://github.com/monotykamary/pi-retry at 6483ab0f204076aa3ec385746ec1d58f0625cc76.
 // See packages/coding-agent/docs/third-party/pi-retry/NOTICE.md.
 //
-// Pie adaptation: no SDK prototype patching and no competing retry loop. The
-// plugin runs on the public `agent_before_settle` boundary, which Pie reaches
-// only after native retry and compaction declined to continue, so exactly one
-// component owns each retry.
-import { isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
+// Pie adaptation: no SDK prototype patching. The plugin takes over the built-in
+// agent-turn retry scheduler through the supported `pi.setNativeRetryEnabled()`
+// action and owns the backoff on the public `agent_before_settle` boundary, so
+// exactly one component retries a failure.
+import { isContextOverflow } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 import type { ReadonlySessionManager } from "../../core/session-manager.ts";
 import { calculateDelay, formatDuration, type RetryPolicy, readRetryPolicy } from "./config.ts";
@@ -14,10 +14,11 @@ import {
 	getErrorCategory,
 	hasEmptyStop,
 	hasMaxTokensStop,
+	isErrorStop,
 	isPermanentError,
 	isQuotaExhaustedError,
-	isRetryableError,
 	lastProjectedAssistant,
+	type RetryCategory,
 } from "./patterns.ts";
 
 /** One extra nudge is the whole budget for an empty or think-only response. */
@@ -32,13 +33,35 @@ const CONTINUATION_MESSAGE = "Continue exactly where you left off without repeat
 const EMPTY_STOP_MESSAGE =
 	"Your previous turn contained only thinking and no answer or text. Continue now and produce the actual response, using tools if needed.";
 
+/** First-attempt wording per category; the retry itself is the same for all of them. */
+const CATEGORY_NOTICE: Record<RetryCategory, string> = {
+	"400-413": "Retrying after a 400/413 error; if the payload is genuinely too large this keeps failing.",
+	credit: "Retrying after a credit error; a mid-session top-up lets the retry resume.",
+	connection: "Retrying after a connection error.",
+	server: "Retrying after a server error.",
+	other: "Retrying after an error.",
+};
+
+interface CategoryState {
+	attempts: number;
+	lastError: string;
+}
+
 export default function retryExtension(pi: ExtensionAPI): void {
 	let retryAttempts = 0;
 	let maxDelayRetries = 0;
 	let continuations = 0;
 	let emptyNudges = 0;
 	let generation = 0;
+	let lifecycleId = 0;
 	let overflowNoticeShown = false;
+	const categories: Record<RetryCategory, CategoryState> = {
+		"400-413": { attempts: 0, lastError: "" },
+		credit: { attempts: 0, lastError: "" },
+		connection: { attempts: 0, lastError: "" },
+		server: { attempts: 0, lastError: "" },
+		other: { attempts: 0, lastError: "" },
+	};
 
 	const resetCounters = () => {
 		retryAttempts = 0;
@@ -46,10 +69,15 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		continuations = 0;
 		emptyNudges = 0;
 		overflowNoticeShown = false;
+		for (const state of Object.values(categories)) {
+			state.attempts = 0;
+			state.lastError = "";
+		}
 	};
 
 	const policy = (): RetryPolicy => readRetryPolicy(pi.getSettings());
-	const nativeRetryEnabled = () => pi.getSettings().retry?.enabled ?? true;
+	/** `retry.enabled` is the master switch; the RPC `set_auto_retry` command toggles it. */
+	const autoRetryEnabled = (): boolean => pi.getSettings().retry?.enabled ?? true;
 	const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error") =>
 		ctx.ui.notify(message, level);
 	const setStatus = (ctx: ExtensionContext, text: string | undefined) => {
@@ -57,6 +85,13 @@ export default function retryExtension(pi: ExtensionAPI): void {
 			ctx.ui.setStatus(RETRY_STATUS_KEY, text);
 		} catch {
 			// A closing or headless UI must not break the retry.
+		}
+	};
+	const emitLifecycle = (event: string, id: number) => {
+		try {
+			pi.events.emit(event, { retryId: id });
+		} catch {
+			// A replaced session invalidates the bus while a retry unwinds.
 		}
 	};
 
@@ -80,17 +115,33 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	const cancelled = (own: number) => generation !== own;
+	pi.on("session_start", () => {
+		// The plugin owns agent-turn retry while it is loaded, so the built-in
+		// scheduler must not run a second backoff over the same failure. Provider
+		// request retries and compaction retries are unaffected.
+		pi.setNativeRetryEnabled(false);
+		generation++;
+		resetCounters();
+	});
+
+	pi.on("session_shutdown", () => {
+		pi.setNativeRetryEnabled(true);
+		generation++;
+		resetCounters();
+	});
 
 	pi.on("agent_before_settle", async (event, ctx) => {
 		const assistant = lastProjectedAssistant(event.context.contextEntries);
 		if (!assistant) return undefined;
-		if (assistant.stopReason !== "error" && !hasMaxTokensStop(assistant) && !hasEmptyStop(assistant))
-			return undefined;
+		if (!isErrorStop(assistant) && !hasMaxTokensStop(assistant) && !hasEmptyStop(assistant)) return undefined;
 
 		const own = generation;
 		const settings = policy();
 		const drafts = [...(event.entries ?? [])];
+
+		// Automatic retry is off: `retry.enabled` or the RPC set_auto_retry command.
+		// This gates retries, continuations, and empty-response nudges alike.
+		if (!autoRetryEnabled()) return undefined;
 
 		// A response that stopped early or produced nothing keeps its own turn,
 		// so the continuation is queued as a hidden provider-valid user message.
@@ -123,15 +174,15 @@ export default function retryExtension(pi: ExtensionAPI): void {
 			notify(
 				ctx,
 				empty
-					? `Empty response — nudging once to produce output.`
+					? "Empty response — nudging once to produce output."
 					: `Output limit reached — continuing the response (${continuations}/${settings.maxContinuations}).`,
 				"info",
 			);
 			if (!(await backoff(ctx, calculateDelay(attempt + 1, settings), attempt + 1, own))) return undefined;
-			if (cancelled(own)) return undefined;
+			if (generation !== own) return undefined;
 			drafts.push({
 				type: "custom_message",
-				customType: empty ? CONTINUATION_CUSTOM_TYPE : CONTINUATION_CUSTOM_TYPE,
+				customType: CONTINUATION_CUSTOM_TYPE,
 				content: empty ? EMPTY_STOP_MESSAGE : CONTINUATION_MESSAGE,
 				display: false,
 			});
@@ -146,24 +197,6 @@ export default function retryExtension(pi: ExtensionAPI): void {
 			}
 			return undefined;
 		}
-		if (isPermanentError(assistant)) {
-			notify(ctx, `Non-retryable error (not retried): ${(assistant.errorMessage ?? "").slice(0, 120)}`, "error");
-			return undefined;
-		}
-		if (isQuotaExhaustedError(assistant)) {
-			notify(
-				ctx,
-				`Quota or budget exhausted — not retrying. Fix the plan, billing, or wait for the reset window, then run /retry.`,
-				"error",
-			);
-			return undefined;
-		}
-		if (!isRetryableError(assistant)) return undefined;
-
-		// While native retry is enabled it owns every error it classifies, so the
-		// plugin never runs a second backoff schedule over the same failure. With
-		// native retry disabled the plugin catches those errors too.
-		if (nativeRetryEnabled() && isRetryableAssistantError(assistant)) return undefined;
 
 		if (maxDelayRetries >= settings.maxRetriesAtMaxDelay) {
 			notify(
@@ -174,15 +207,25 @@ export default function retryExtension(pi: ExtensionAPI): void {
 			return undefined;
 		}
 
+		const category = getErrorCategory(assistant);
+		const state = categories[category];
+		state.attempts++;
+		state.lastError = assistant.errorMessage ?? "";
 		retryAttempts++;
 		const delay = calculateDelay(retryAttempts, settings);
 		if (delay >= settings.maxDelayMs) maxDelayRetries++;
-		const category = getErrorCategory(assistant);
 		if (retryAttempts === 1) {
-			notify(ctx, `Retrying after ${category} error: ${(assistant.errorMessage ?? "").slice(0, 120)}`, "info");
+			const futile = isPermanentError(assistant)
+				? " This looks permanent (invalid key or unknown model); fix it to make the retry succeed."
+				: isQuotaExhaustedError(assistant)
+					? " Quota or budget is exhausted; retrying cannot help until the plan or budget is fixed."
+					: "";
+			const id = ++lifecycleId;
+			emitLifecycle("pie.retry-started", id);
+			notify(ctx, `${CATEGORY_NOTICE[category]}${futile} ${state.lastError.slice(0, 120)}`, "info");
 		}
 		if (!(await backoff(ctx, delay, retryAttempts, own))) return undefined;
-		if (cancelled(own)) return undefined;
+		if (generation !== own) return undefined;
 
 		// Omit the failed response from the model projection so the same request
 		// is sent again. The raw history keeps it, exactly like native retry.
@@ -198,16 +241,13 @@ export default function retryExtension(pi: ExtensionAPI): void {
 		if (message.role !== "assistant") return;
 		if (message.stopReason === "error" || message.stopReason === "length") return;
 		if (hasEmptyStop(message)) return;
+		if (lifecycleId > 0) emitLifecycle("pie.retry-completed", lifecycleId);
 		resetCounters();
 	});
 
 	pi.on("input", () => {
 		generation++;
-		resetCounters();
-	});
-
-	pi.on("session_shutdown", () => {
-		generation++;
+		if (lifecycleId > 0) emitLifecycle("pie.retry-cancelled", lifecycleId);
 		resetCounters();
 	});
 
@@ -219,21 +259,22 @@ export default function retryExtension(pi: ExtensionAPI): void {
 
 			if (subcommand === "status") {
 				const last = lastAssistantOf(ctx.sessionManager);
-				notify(
-					ctx,
-					[
-						"=== Pie retry status ===",
-						`Error retries: ${retryAttempts}`,
-						`Retries at max delay: ${maxDelayRetries}/${settings.maxRetriesAtMaxDelay}`,
-						`Output continuations: ${continuations}/${settings.maxContinuations}`,
-						`Empty-response nudges: ${emptyNudges}/${MAX_EMPTY_NUDGES}`,
-						`Backoff: ${settings.baseDelayMs}ms x${settings.multiplier}, max ${settings.maxDelayMs}ms`,
-						`Last stop reason: ${last?.stopReason ?? "none"}`,
-						`Last error: ${(last?.errorMessage ?? "none").slice(0, 120)}`,
-						"Native retry runs first; this plugin covers the errors it declines.",
-					].join("\n"),
-					"info",
-				);
+				const lines = [
+					"=== Pie retry status ===",
+					`Automatic retry: ${autoRetryEnabled() ? "on" : "off"} (retry.enabled; RPC set_auto_retry)`,
+					`Owns agent-turn retry: yes (built-in scheduler suppressed while loaded)`,
+					`Retries: ${retryAttempts} total, ${maxDelayRetries}/${settings.maxRetriesAtMaxDelay} at max delay`,
+					`Output continuations: ${continuations}/${settings.maxContinuations}`,
+					`Empty-response nudges: ${emptyNudges}/${MAX_EMPTY_NUDGES}`,
+					`Backoff: ${settings.baseDelayMs}ms x${settings.multiplier}, max ${settings.maxDelayMs}ms`,
+					"By category:",
+				];
+				for (const [name, state] of Object.entries(categories)) {
+					lines.push(`  ${name}: ${state.attempts}${state.lastError ? ` — ${state.lastError.slice(0, 80)}` : ""}`);
+				}
+				lines.push(`Last stop reason: ${last?.stopReason ?? "none"}`);
+				lines.push(`Last error: ${(last?.errorMessage ?? "none").slice(0, 120)}`);
+				notify(ctx, lines.join("\n"), "info");
 				return;
 			}
 
@@ -256,14 +297,6 @@ export default function retryExtension(pi: ExtensionAPI): void {
 						"Context overflow — use /compact to reduce context; compaction retries automatically.",
 						"info",
 					);
-					return;
-				}
-				if (isPermanentError(last)) {
-					notify(ctx, "Non-retryable error — fix the underlying issue first, then /retry.", "warning");
-					return;
-				}
-				if (isQuotaExhaustedError(last)) {
-					notify(ctx, "Quota or budget exhausted — resolve the plan or billing issue first.", "warning");
 					return;
 				}
 			} else if (!hasMaxTokensStop(last) && !hasEmptyStop(last)) {

@@ -90,6 +90,7 @@ describe("ExtensionRunner", () => {
 		getAllTools: () => [],
 		getSettings: () => ({}),
 		setActiveTools: () => {},
+		setNativeRetryEnabled: () => {},
 		refreshTools: () => {},
 		getCommands: () => [],
 		setModel: async () => false,

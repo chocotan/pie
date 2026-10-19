@@ -1782,6 +1782,15 @@ export interface ExtensionAPI {
 	 */
 	setActiveTools(toolNames: string[]): void;
 
+	/**
+	 * Enable or disable Pie's built-in agent-turn retry scheduler for this session.
+	 * A plugin that implements its own retry disables the built-in scheduler so
+	 * only one backoff schedule owns a failure. Provider-level request retries and
+	 * compaction retries are unaffected. The session keeps the setting until it
+	 * changes again, so a plugin must re-apply it on `session_start`.
+	 */
+	setNativeRetryEnabled(enabled: boolean): void;
+
 	/** Get available slash commands in the current session. */
 	getCommands(): SlashCommandInfo[];
 
@@ -2171,6 +2180,11 @@ export interface ExtensionRuntimeState {
 	assertActive: () => void;
 	/** Marks this extension instance as stale after runtime replacement or reload. */
 	invalidate: (message?: string) => void;
+	/**
+	 * Enable or disable Pie's built-in agent-turn retry scheduler for this session.
+	 * An extension that owns retry disables it so only one backoff schedule runs.
+	 */
+	setNativeRetryEnabled: (enabled: boolean) => void;
 	/** Retain an event-bus subscription until this runtime is invalidated. */
 	trackEventBusSubscription: (unsubscribe: () => void) => () => void;
 	/**
@@ -2208,6 +2222,8 @@ export interface ExtensionActions {
 	setModel: SetModelHandler;
 	getThinkingLevel: GetThinkingLevelHandler;
 	setThinkingLevel: SetThinkingLevelHandler;
+	/** See {@link ExtensionAPI.setNativeRetryEnabled}. */
+	setNativeRetryEnabled: (enabled: boolean) => void;
 }
 
 /**

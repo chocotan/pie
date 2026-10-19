@@ -138,9 +138,11 @@ The schema, validation, normalization, response format, and RPC behavior are ada
 
 ## Retry
 
-Pie's native retry handles the provider errors it classifies, using `settings.retry`. The replaceable `retry` plugin adds a catch-all policy on top: any remaining assistant error is retried, except permanent failures (invalid key, missing model) and quota, session-limit, or budget exhaustion. It also continues responses cut off at the output token limit and nudges a turn that ends with no usable output.
+The replaceable `retry` plugin owns automatic retry while it is loaded. It retries every failed assistant turn except context overflow, which compaction handles. A response cut off at the output token limit is continued, and a turn that ends with no usable output is nudged once.
 
-Configure it under `pieRetry` in `~/.pie/settings.json` (project settings override matching global values):
+`retry.enabled` (default true) is the master switch; it is also what the RPC `set_auto_retry` command toggles. With it off, no automatic retries, continuations, or nudges run. The plugin disables Pie's built-in agent-turn scheduler through `pi.setNativeRetryEnabled(false)`, so exactly one backoff schedule owns a failure. Provider request retries and compaction retries are unaffected, and `retry.provider.*` still applies.
+
+Configure the schedule under `pieRetry` in `~/.pie/settings.json` (project settings override matching global values):
 
 ```json
 {
@@ -158,11 +160,13 @@ Configure it under `pieRetry` in `~/.pie/settings.json` (project settings overri
 
 `baseDelayMs` is the first retry delay, `multiplier` grows it, `maxDelayMs` caps it, and `maxRetriesAtMaxDelay` stops the loop after that many failures at the cap. `maxContinuations` bounds output-limit continuations; `retryContinuations` and `retryEmptyStop` disable those two behaviors. Invalid values are ignored with a warning.
 
-`/retry` retries the last failure manually, `/retry status` prints the counters and effective policy, and `/retry reset` clears them. While a backoff is pending, the footer shows the attempt and remaining delay; new input or a session shutdown cancels it.
+Permanent failures (invalid key, unknown model) and quota, session-limit, or budget exhaustion are retried like any other error, but their first notice states that the retry cannot succeed until the underlying problem is fixed. `maxRetriesAtMaxDelay` keeps that bounded.
 
-Context overflow is never retried in place: it is left to compaction, which reduces the context and retries once. The failed response is omitted from the model projection while remaining in the session transcript, so the model receives the same request again. Because Pie's native retry runs first, an error it already classifies is retried by native retry before this plugin takes over; each failure has exactly one owner.
+`/retry` retries the last failure manually, `/retry status` prints per-category counters and the effective policy, and `/retry reset` clears them. While a backoff is pending the footer shows the attempt and remaining delay; new input or a session shutdown cancels it.
 
-Subagent children do not load built-in extensions and use Pie's native retry through their inherited settings. The port is adapted from [pi-retry](https://github.com/monotykamary/pi-retry) 0.11.2; its [MIT notice and the list of deliberate differences](third-party/pi-retry/NOTICE.md) are included. Disable it with `-builtin:retry` or replace it with another plugin registering `/retry`.
+Context overflow is never retried in place: compaction reduces the context and retries once. A retried failure is omitted from the model projection and kept in the session transcript, so the provider receives the same request again.
+
+Subagent children do not load built-in extensions and keep Pie's built-in retry with their inherited settings. The port is adapted from [pi-retry](https://github.com/monotykamary/pi-retry) 0.11.2; its [MIT notice and the list of deliberate differences](third-party/pi-retry/NOTICE.md) are included. Disable it with `-builtin:retry` or replace it with another plugin registering `/retry`.
 
 ## Background shell jobs
 

@@ -4,7 +4,8 @@
 
 ### Added
 
-- Replaceable `retry` plugin with catch-all error retry, output-limit continuation, empty-response nudge, and `/retry status|reset`, adapted from pi-retry.
+- Replaceable `retry` plugin that owns automatic retry while loaded, retrying every failed turn except context overflow, continuing output-limited responses, nudging empty ones, and adding `/retry status|reset`. Adapted from pi-retry.
+- `pi.setNativeRetryEnabled()` extension action, so a plugin that owns retry can disable the built-in agent-turn scheduler without patching private methods.
 
 ### Changed
 

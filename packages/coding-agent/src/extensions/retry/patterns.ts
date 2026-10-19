@@ -118,18 +118,11 @@ export function isQuotaExhaustedError(message: AssistantMessage): boolean {
 }
 
 /**
- * Every assistant error is retryable except permanent failures and quota,
- * session-limit, or budget exhaustion. That catch-all is the point of the
- * upstream plugin: a new provider's unknown error is retried too.
+ * Any assistant message that ended as an error is retried. Pie's bundled plugin
+ * retries every error except context overflow, which compaction owns.
  */
-export function isRetryableError(message: AssistantMessage): boolean {
-	return (
-		isAssistantMessage(message) &&
-		message.stopReason === "error" &&
-		Boolean(message.errorMessage) &&
-		!isPermanentError(message) &&
-		!isQuotaExhaustedError(message)
-	);
+export function isErrorStop(message: AssistantMessage): boolean {
+	return message.stopReason === "error" && Boolean(message.errorMessage);
 }
 
 export function getErrorCategory(message: AssistantMessage): RetryCategory {
