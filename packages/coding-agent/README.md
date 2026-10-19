@@ -1,6 +1,6 @@
 # Pie
 
-Pie is a source fork of [Pi](https://github.com/earendil-works/pi), originally created by **Mario Zechner**, with built-in Todo, isolated subagents, background shell jobs, structured user questions, Ponytail, a usage dashboard, and a compact terminal workflow.
+Pie is a source fork of [Pi](https://github.com/earendil-works/pi), originally created by **Mario Zechner**, with built-in Todo, isolated subagents, background shell jobs, structured user questions, Ponytail, a usage dashboard, catch-all retry, and a compact terminal workflow.
 
 The CLI command is `pie`. Global configuration lives directly in `~/.pie`, and project configuration lives in `.pie`. Overrides are `PIE_CODING_AGENT_DIR` and `PIE_CODING_AGENT_SESSION_DIR`. Earlier command names, directories and directory overrides are not compatibility aliases.
 

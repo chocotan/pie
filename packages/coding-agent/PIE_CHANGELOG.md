@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Replaceable `retry` plugin with catch-all error retry, output-limit continuation, empty-response nudge, and `/retry status|reset`, adapted from pi-retry.
+
 ### Changed
 
 - Installation, updates, release metadata and project links now use the renamed `chocotan/pie` GitHub repository.
