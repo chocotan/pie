@@ -26,6 +26,7 @@ import { renderSubagentCall } from "./renderers.ts";
 import { SubagentDetailView } from "./view.ts";
 
 export const SUBAGENT_ENTRY = "pie.subagent";
+const SUBAGENT_REMOVED_ENTRY = "pie.subagent-removed";
 const recordSchema = Type.Object({
 	id: Type.String(),
 	agent: Type.String(),
@@ -44,6 +45,12 @@ const recordSchema = Type.Object({
 });
 const validateRecord = Compile(recordSchema);
 export type SubagentRecord = Static<typeof recordSchema>;
+
+export function sortSubagents(records: readonly SubagentRecord[]): SubagentRecord[] {
+	const rank = { running: 0, queued: 1, error: 2, stopped: 2, interrupted: 2, completed: 3 };
+	return [...records].sort((a, b) => rank[a.status] - rank[b.status] || b.startedAt - a.startedAt);
+}
+
 const agentParams = Type.Object({
 	prompt: Type.String({ minLength: 1, maxLength: 65536 }),
 	description: Type.Optional(Type.String({ maxLength: 400 })),
@@ -85,7 +92,20 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 		let context: ExtensionContext | undefined;
 		let panelDismissed = false;
 		let timer: ReturnType<typeof setInterval> | undefined;
-		const save = (record: SubagentRecord) => pi.appendEntry(SUBAGENT_ENTRY, structuredClone(record));
+		const prune = () => {
+			const completed = [...records.values()]
+				.filter((record) => record.status === "completed")
+				.sort((a, b) => (a.finishedAt ?? a.startedAt) - (b.finishedAt ?? b.startedAt));
+			for (const record of completed.slice(0, Math.max(0, records.size - 10))) {
+				records.delete(record.id);
+				if (!detailOpen) transcripts.delete(record.id);
+				pi.appendEntry(SUBAGENT_REMOVED_ENTRY, record.id);
+			}
+		};
+		const save = (record: SubagentRecord) => {
+			pi.appendEntry(SUBAGENT_ENTRY, structuredClone(record));
+			prune();
+		};
 		const reportTask = (record: SubagentRecord, status: "pending" | "in_progress" | "completed") => {
 			if (record.taskId) pi.events.emit(TASK_RUN_EVENT, { taskId: record.taskId, status, owner: record.id });
 		};
@@ -135,10 +155,11 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 				detailOpen = false;
 				detailUI = undefined;
 				closeDetail = undefined;
+				for (const id of transcripts.keys()) if (!records.has(id)) transcripts.delete(id);
 			}
 		};
 		const showAgents = async (ctx: ExtensionContext) => {
-			const list = [...records.values()];
+			const list = sortSubagents([...records.values()]);
 			if (!ctx.hasUI) {
 				pi.sendMessage({
 					customType: "pie.subagent-list",
@@ -247,26 +268,34 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 					.map((run) => stop(run.record.id)),
 			);
 		};
-		pi.on("session_start", (_event, ctx) => {
+		const restore = (ctx: ExtensionContext, interruption: string) => {
 			context = ctx;
 			panelDismissed = false;
 			closing = false;
 			records.clear();
 			transcripts.clear();
 			for (const entry of ctx.sessionManager.getBranch()) {
-				if (entry.type !== "custom" || entry.customType !== SUBAGENT_ENTRY) continue;
-				if (!validateRecord.Check(entry.data)) throw new Error("Invalid saved subagent record");
-				records.set(entry.data.id, structuredClone(entry.data));
-			}
-			for (const record of records.values())
-				if (["running", "queued"].includes(record.status)) {
-					record.status = "interrupted";
-					record.finishedAt = Date.now();
-					record.error = "Session ended before this run completed";
-					save(record);
-					reportTask(record, "pending");
+				if (entry.type !== "custom") continue;
+				if (entry.customType === SUBAGENT_REMOVED_ENTRY && typeof entry.data === "string") {
+					records.delete(entry.data);
+				} else if (entry.customType === SUBAGENT_ENTRY) {
+					if (!validateRecord.Check(entry.data)) throw new Error("Invalid saved subagent record");
+					records.set(entry.data.id, structuredClone(entry.data));
 				}
+			}
+			for (const record of records.values()) {
+				if (!["running", "queued"].includes(record.status)) continue;
+				record.status = "interrupted";
+				record.finishedAt = Date.now();
+				record.error = interruption;
+				save(record);
+				reportTask(record, "pending");
+			}
+			prune();
 			refresh();
+		};
+		pi.on("session_start", (_event, ctx) => {
+			restore(ctx, "Session ended before this run completed");
 		});
 		pi.on("session_shutdown", async () => {
 			await stopAll();
@@ -280,24 +309,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 			}
 		});
 		pi.on("session_tree", (_event, ctx) => {
-			context = ctx;
-			panelDismissed = false;
-			closing = false;
-			records.clear();
-			transcripts.clear();
-			for (const entry of ctx.sessionManager.getBranch())
-				if (entry.type === "custom" && entry.customType === SUBAGENT_ENTRY && validateRecord.Check(entry.data)) {
-					const record = structuredClone(entry.data);
-					if (["queued", "running"].includes(record.status)) {
-						record.status = "interrupted";
-						record.finishedAt = Date.now();
-						record.error = "Tree navigation interrupted this run";
-						save(record);
-						reportTask(record, "pending");
-					}
-					records.set(record.id, record);
-				}
-			refresh();
+			restore(ctx, "Tree navigation interrupted this run");
 		});
 
 		const prepare = (args: Static<typeof agentParams>, ctx: ExtensionToolContext, taskId?: string): Run => {
@@ -586,7 +598,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 							text: JSON.stringify(
 								{
 									definitions: discoverAgentDefinitions(ctx.cwd, agentDir, ctx.isProjectTrusted()),
-									runs: [...records.values()],
+									runs: sortSubagents([...records.values()]),
 								},
 								null,
 								2,

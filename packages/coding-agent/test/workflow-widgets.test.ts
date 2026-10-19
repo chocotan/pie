@@ -81,14 +81,14 @@ describe("workflow floating and inline widgets", () => {
 			],
 		};
 		text = stripAnsi(panel.render(80).join("\n"));
-		expect(text).toContain("+2 hidden");
-		expect(text).toContain("Todo · 5/7");
+		expect(text).not.toContain("hidden");
+		expect(text).toContain("Todo · 7/7");
 		expect(text).not.toContain("Done 0");
 		expect(text).toContain("Open 0");
 		panel.handleMouse(mouse(76, 0));
 		expect(close).toHaveBeenCalledOnce();
 	});
-	it.each([5, 6, 20])("keeps five recent finished subagents and hides only overflow (%s total)", (total) => {
+	it.each([5, 10, 11, 20])("caps subagent rows at ten with a working overflow entrance (%s total)", (total) => {
 		const records: SubagentRecord[] = Array.from({ length: total }, (_, index) => ({
 			id: String(index),
 			agent: "worker",
@@ -111,19 +111,20 @@ describe("workflow floating and inline widgets", () => {
 			vi.fn(),
 		);
 		const rows = panel.render(80).map(stripAnsi);
-		expect(rows[0]).toContain(`5/${total}`);
-		expect(rows.filter((line) => line.includes("●"))).toHaveLength(5);
-		panel.handleMouse(mouse(3, 5));
-		expect(open).toHaveBeenCalledWith(records[total - 5]);
-		if (total > 5) {
-			const row = rows.findIndex((line) => line.includes(`+${total - 5} hidden`));
-			expect(row).toBe(6);
+		const visible = Math.min(10, total);
+		expect(rows[0]).toContain(`${visible}/${total}`);
+		expect(rows.filter((line) => line.includes("●"))).toHaveLength(visible);
+		panel.handleMouse(mouse(3, visible));
+		expect(open).toHaveBeenCalledWith(records[total - visible]);
+		if (total > visible) {
+			const row = rows.findIndex((line) => line.includes(`+${total - visible} hidden`));
+			expect(row).toBe(visible + 1);
 			panel.handleMouse(mouse(3, row));
 			expect(more).toHaveBeenCalledOnce();
 		}
 		panel.dispose();
 	});
-	it.each([5, 6, 20])("keeps five Todo entries with a working overflow entrance (%s total)", (total) => {
+	it.each([5, 10, 11, 20])("caps Todo entries at ten with a working overflow entrance (%s total)", (total) => {
 		const state: TaskState = {
 			nextId: total + 1,
 			tasks: Array.from({ length: total }, (_, index) => ({
@@ -145,13 +146,60 @@ describe("workflow floating and inline widgets", () => {
 			more,
 		);
 		const rows = panel.render(80).map(stripAnsi);
-		expect(rows[0]).toContain(`5/${total}`);
-		expect(rows.filter((line) => line.includes("#"))).toHaveLength(5);
-		if (total > 5) {
-			const row = rows.findIndex((line) => line.includes(`+${total - 5} hidden`));
-			expect(row).toBe(6);
+		const visible = Math.min(10, total);
+		expect(rows[0]).toContain(`${visible}/${total}`);
+		expect(rows.filter((line) => line.includes("#"))).toHaveLength(visible);
+		if (total > visible) {
+			const row = rows.findIndex((line) => line.includes(`+${total - visible} hidden`));
+			expect(row).toBe(visible + 1);
 			panel.handleMouse(mouse(3, row));
 			expect(more).toHaveBeenCalledOnce();
+		}
+	});
+	it("sorts running work before pending/queued work and completed rows even below the limit", () => {
+		const ui = { terminal: { rows: 40 }, requestRender: vi.fn() } as unknown as TUI;
+		const state: TaskState = {
+			nextId: 4,
+			tasks: ["completed", "pending", "in_progress"].map((status, index) => ({
+				id: String(index),
+				subject: status,
+				description: "",
+				status: status as TaskState["tasks"][number]["status"],
+				blockedBy: [],
+				metadata: {},
+			})),
+		};
+		const select = vi.fn();
+		const todo = new TodoPanel(ui, () => state, vi.fn(), select, vi.fn());
+		const rows = todo.render(80).map(stripAnsi);
+		expect(rows[1]).toContain("in_progress");
+		expect(rows[2]).toContain("pending");
+		expect(rows[3]).toContain("completed");
+		todo.handleMouse(mouse(3, 1));
+		expect(select).toHaveBeenCalledWith(state.tasks[2]);
+		const records: SubagentRecord[] = ["completed", "queued", "running", "error"].map((status, index) => ({
+			id: String(index),
+			agent: "worker",
+			description: status,
+			prompt: "",
+			status: status as SubagentRecord["status"],
+			model: "faux/local",
+			thinking: "off",
+			startedAt: index,
+			output: "",
+		}));
+		const open = vi.fn();
+		const agents = new SubagentPanel(ui, records, open, vi.fn(), vi.fn());
+		try {
+			const rows = agents.render(80).map(stripAnsi);
+			expect(rows[1]).toContain("running");
+			expect(rows[2]).toContain("queued");
+			expect(rows[3]).toContain("error");
+			expect(rows[4]).toContain("completed");
+			agents.handleMouse(mouse(3, 1));
+			expect(open).toHaveBeenCalledWith(records[2]);
+		} finally {
+			agents.dispose();
 		}
 	});
 	it("animates queued and running subagents, then stops on a settled status", () => {
@@ -249,8 +297,8 @@ describe("workflow floating and inline widgets", () => {
 			close,
 		);
 		const mixedText = stripAnsi(mixed.render(80).join("\n"));
-		expect(mixedText).toContain("Subagents · 5/7");
-		expect(mixedText).toContain("+2 hidden");
+		expect(mixedText).toContain("Subagents · 6/7");
+		expect(mixedText).toContain("+1 hidden");
 		expect(mixedText).toContain("Running 0");
 		const crowded = new SubagentPanel(
 			ui,

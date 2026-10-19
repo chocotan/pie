@@ -9,7 +9,7 @@ import {
 import { ActivityDot } from "../../modes/interactive/components/activity-dot.ts";
 import { highlightHover } from "../../modes/interactive/components/hover-style.ts";
 import { theme } from "../../modes/interactive/theme/theme.ts";
-import type { SubagentRecord } from "./index.ts";
+import { type SubagentRecord, sortSubagents } from "./index.ts";
 
 /** Floating run list, one entry per row, with direct detail and overflow entrances. */
 export class SubagentPanel implements Component {
@@ -44,11 +44,8 @@ export class SubagentPanel implements Component {
 		this.width = width;
 		this.rows = [];
 		if (!this.records.length || width < 1) return [];
-		const sorted = [...this.records].sort((a, b) => {
-			const active = (record: SubagentRecord) => (["running", "queued"].includes(record.status) ? 1 : 0);
-			return active(b) - active(a) || b.startedAt - a.startedAt;
-		});
-		const count = Math.min(5, sorted.length, Math.max(1, Math.floor(this.ui.terminal.rows * 0.35) - 2));
+		const sorted = sortSubagents(this.records);
+		const count = Math.min(10, sorted.length, Math.max(1, Math.floor(this.ui.terminal.rows * 0.35) - 2));
 		const records = sorted.slice(0, count);
 		const hidden = sorted.length - count;
 		if (!records.some((record) => ["running", "queued"].includes(record.status))) this.dispose();

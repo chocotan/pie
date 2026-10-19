@@ -23,11 +23,38 @@ const validateState = Compile(stateSchema);
 export type TaskRecord = Static<typeof taskSchema>;
 export type TaskState = Static<typeof stateSchema>;
 
+export function sortTasks(tasks: readonly TaskRecord[]): TaskRecord[] {
+	return [
+		...tasks.filter((task) => task.status === "in_progress"),
+		...tasks.filter((task) => task.status === "pending"),
+		...tasks.filter((task) => task.status === "completed").reverse(),
+	];
+}
+
+function retainTasks(state: TaskState): TaskState {
+	const removed = new Set(
+		state.tasks
+			.filter((task) => task.status === "completed")
+			.slice(0, Math.max(0, state.tasks.length - 10))
+			.map((task) => task.id),
+	);
+	if (!removed.size) return state;
+	return {
+		...state,
+		tasks: state.tasks
+			.filter((task) => !removed.has(task.id))
+			.map((task) => ({
+				...task,
+				blockedBy: task.blockedBy.filter((id) => !removed.has(id)),
+			})),
+	};
+}
+
 export function readTaskState(manager: ReadonlySessionManager): TaskState {
 	const entry = manager.getBranch().findLast((item) => item.type === "custom" && item.customType === TASK_STATE_ENTRY);
 	if (!entry || entry.type !== "custom") return { nextId: 1, tasks: [] };
 	if (!validateState.Check(entry.data)) throw new Error("Invalid saved task state");
-	return structuredClone(entry.data);
+	return retainTasks(structuredClone(entry.data));
 }
 
 const updateSchema = Type.Object({
@@ -119,7 +146,7 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 					},
 					showTask,
 					() => {
-						const tasks = [...state.tasks];
+						const tasks = sortTasks(state.tasks);
 						const labels = tasks.map((task) => `#${task.id} ${task.subject} · ${task.status}`);
 						void ctx.ui
 							.select("All tasks", labels)
@@ -134,7 +161,7 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 		);
 	};
 	const save = (state: TaskState, ctx: ExtensionContext) => {
-		pi.appendEntry(TASK_STATE_ENTRY, state);
+		pi.appendEntry(TASK_STATE_ENTRY, retainTasks(state));
 		show(ctx);
 	};
 	pi.on("session_start", (_event, ctx) => {
@@ -179,7 +206,8 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "TaskCreate",
 		label: "Create task",
-		description: "Create a session task with pending status. Use for multi-step work; keep statuses current.",
+		description:
+			"Create a session task with pending status. Use for multi-step work; keep statuses current. Above ten records, the oldest completed tasks are removed automatically.",
 		promptSnippet: "Create a task for multi-step work",
 		executionMode: "sequential",
 		parameters: Type.Object({
@@ -207,11 +235,12 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "TaskList",
 		label: "List tasks",
-		description: "List all tasks on the current session branch, including blockers.",
+		description:
+			"List retained tasks on the current session branch, with in-progress work first and completed work last, including blockers.",
 		parameters: Type.Object({}),
 		annotations: { readOnlyHint: true },
 		async execute(_id, _args, _signal, _update, ctx) {
-			return result(readTaskState(ctx.sessionManager).tasks);
+			return result(sortTasks(readTaskState(ctx.sessionManager).tasks));
 		},
 	});
 	pi.registerTool({
@@ -257,7 +286,7 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 				}
 				pi.sendMessage({
 					customType: "pie.task-list",
-					content: JSON.stringify(readTaskState(ctx.sessionManager).tasks, null, 2),
+					content: JSON.stringify(sortTasks(readTaskState(ctx.sessionManager).tasks), null, 2),
 					display: true,
 				});
 			},

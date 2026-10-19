@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { highlightHover } from "../../modes/interactive/components/hover-style.ts";
 import { theme } from "../../modes/interactive/theme/theme.ts";
-import type { TaskRecord, TaskState } from "./index.ts";
+import { sortTasks, type TaskRecord, type TaskState } from "./index.ts";
 
 /** Non-capturing task panel; its owner controls opening and dismissal. */
 export class TodoPanel implements Component {
@@ -44,14 +44,7 @@ export class TodoPanel implements Component {
 		const state = this.getState();
 		const done = state.tasks.filter((task) => task.status === "completed").length;
 		this.moreRow = undefined;
-		const tasks =
-			state.tasks.length > 5
-				? [
-						...state.tasks.filter((task) => task.status === "in_progress"),
-						...state.tasks.filter((task) => task.status === "pending"),
-						...state.tasks.filter((task) => task.status === "completed").reverse(),
-					].slice(0, 5)
-				: state.tasks;
+		const tasks = sortTasks(state.tasks).slice(0, 10);
 		const hidden = state.tasks.length - tasks.length;
 		const inner = Math.max(1, width - 4);
 		const title = truncateToWidth(
