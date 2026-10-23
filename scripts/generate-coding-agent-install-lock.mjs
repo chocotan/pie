@@ -137,6 +137,15 @@ function isExactVersionSpec(spec) {
 	return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(spec);
 }
 
+/**
+ * Vendored dependencies ship inside this package (`file:` specs under vendor/).
+ * They are not published separately, so npm resolves them from the package tree
+ * instead of a registry; the installer lock never lists them.
+ */
+function isVendoredSpec(spec) {
+	return typeof spec === "string" && spec.startsWith("file:");
+}
+
 function getInternalWorkspaces(lockPackages) {
 	const workspaces = new Map();
 
@@ -209,7 +218,11 @@ function addInternalWorkspace(installLockPackages, addedPaths, queue, name, work
 	installLockPackages[outputPath] = sortedPackageEntry(entry);
 	addedPaths.add(outputPath);
 
-	for (const dependencyName of Object.keys(packageDependencies(packageJson))) {
+	const workspaceDependencies = packageDependencies(packageJson);
+	for (const dependencyName of Object.keys(workspaceDependencies)) {
+		if (isVendoredSpec(workspaceDependencies[dependencyName])) {
+			continue;
+		}
 		queue.push({
 			name: dependencyName,
 			sourceFrom: workspace.lockPath,
@@ -233,7 +246,11 @@ function addExternalPackage(lockPackages, installLockPackages, addedPaths, queue
 	installLockPackages[outputLockPath] = copyLockEntry(entry);
 	addedPaths.add(outputLockPath);
 
-	for (const dependencyName of Object.keys(packageDependencies(entry))) {
+	const entryDependencies = packageDependencies(entry);
+	for (const dependencyName of Object.keys(entryDependencies)) {
+		if (isVendoredSpec(entryDependencies[dependencyName])) {
+			continue;
+		}
 		queue.push({
 			name: dependencyName,
 			sourceFrom: sourceLockPath,
@@ -346,6 +363,9 @@ function validateGeneratedFiles(installerPackageJson, installLock, internalNames
 
 	for (const [lockPath, entry] of Object.entries(installLock.packages)) {
 		for (const [dependencyName, dependencySpec] of Object.entries(packageDependencies(entry))) {
+			if (isVendoredSpec(dependencySpec)) {
+				continue;
+			}
 			let dependencyLockPath;
 			try {
 				dependencyLockPath = resolveExternalDependency(installLock.packages, dependencyName, lockPath);
@@ -383,10 +403,13 @@ function generateInstallLock() {
 	};
 	const addedPaths = new Set([""]);
 	const internalNames = new Set();
-	const queue = Object.keys(packageDependencies(installerPackageJson)).map((name) => ({
-		name,
-		sourceFrom: "",
-	}));
+	const rootDependencies = packageDependencies(installerPackageJson);
+	const queue = Object.keys(rootDependencies)
+		.filter((name) => !isVendoredSpec(rootDependencies[name]))
+		.map((name) => ({
+			name,
+			sourceFrom: "",
+		}));
 
 	while (queue.length > 0) {
 		const item = queue.shift();

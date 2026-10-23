@@ -36,6 +36,10 @@
               "path": "sessions.md"
             },
             {
+              "title": "Keep Working with the Continue Watchdog",
+              "path": "continue-watchdog.md"
+            },
+            {
               "title": "Run Pi Safely",
               "path": "security.md"
             },

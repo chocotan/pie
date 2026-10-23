@@ -2,6 +2,7 @@ import type { InlineExtension } from "../core/extensions/types.ts";
 import askUserExtension from "./ask-user/index.ts";
 import backgroundExtension from "./background/index.ts";
 import codemodeExtension from "./codemode/index.ts";
+import continueWatchdogExtension from "./continue-watchdog/index.ts";
 import llamaExtension from "./llama/index.ts";
 import mcpExtension from "./mcp/index.ts";
 import ponytailExtension from "./ponytail/index.ts";
@@ -14,6 +15,7 @@ import usageExtension from "./usage/index.ts";
 export const builtInExtensions: InlineExtension[] = [
 	{ name: "ask-user-question", factory: askUserExtension, replaceable: true, builtin: true },
 	{ name: "background", factory: backgroundExtension, replaceable: true, builtin: true },
+	{ name: "continue-watchdog", factory: continueWatchdogExtension, replaceable: true, builtin: true },
 	{ name: "ponytail", factory: ponytailExtension, replaceable: true, builtin: true },
 	{ name: "retry", factory: retryExtension, replaceable: true, builtin: true },
 	{ name: "usage", factory: usageExtension, replaceable: true, builtin: true },

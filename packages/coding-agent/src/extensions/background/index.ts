@@ -9,7 +9,13 @@ import type {
 } from "../../core/extensions/types.ts";
 import { normalizePath } from "../../utils/paths.ts";
 import { getPowerShellConfig, getShellConfig } from "../../utils/shell.ts";
-import { BackgroundRegistry, type BackgroundTask, MAX_LOG_BYTES, readTaskLogs } from "./registry.ts";
+import {
+	BACKGROUND_ACTIVITY_EVENT,
+	BackgroundRegistry,
+	type BackgroundTask,
+	MAX_LOG_BYTES,
+	readTaskLogs,
+} from "./registry.ts";
 import { BackgroundDetailView, BackgroundPanel } from "./view.ts";
 
 const runSchema = Type.Object({
@@ -134,7 +140,11 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 			registry = new BackgroundRegistry({
 				agentDir: options.agentDir ?? getAgentDir(),
 				sessionId: ctx.sessionManager.getSessionId(),
-				onChange: refresh,
+				onChange: () => {
+					refresh();
+					const running = registry?.list().filter((task) => task.status === "running").length ?? 0;
+					pi.events.emit(BACKGROUND_ACTIVITY_EVENT, { running });
+				},
 				onError: report,
 				onCompletion: (task) =>
 					pi.sendMessage(

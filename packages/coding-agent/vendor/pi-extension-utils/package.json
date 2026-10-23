@@ -1,0 +1,75 @@
+{
+  "name": "pi-extension-utils",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Shared process transport, Pi inquiry, semantic-hook, and strict XML utilities for Pi extensions.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xz-dev/pi-extension-utils.git"
+  },
+  "homepage": "https://github.com/xz-dev/pi-extension-utils#readme",
+  "bugs": {
+    "url": "https://github.com/xz-dev/pi-extension-utils/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./process-domain": {
+      "types": "./dist/process-domain/index.d.ts",
+      "import": "./dist/process-domain/index.js"
+    },
+    "./xml": {
+      "types": "./dist/xml.d.ts",
+      "import": "./dist/xml.js"
+    },
+    "./pi-inquiry": {
+      "types": "./dist/pi-inquiry.d.ts",
+      "import": "./dist/pi-inquiry.js"
+    },
+    "./pi-agent-state": {
+      "types": "./dist/pi-agent-state.d.ts",
+      "import": "./dist/pi-agent-state.js"
+    },
+    "./semantic-hook": {
+      "types": "./dist/semantic-hook.d.ts",
+      "import": "./dist/semantic-hook.js"
+    },
+    "./preempt-takeover": {
+      "types": "./dist/preempt-takeover.d.ts",
+      "import": "./dist/preempt-takeover.js"
+    },
+    "./package.json": "./package.json",
+    "./private-inquiry": {
+      "types": "./dist/private-inquiry.d.ts",
+      "import": "./dist/private-inquiry.js"
+    }
+  },
+  "files": [
+    "dist",
+    "scripts/prepare-private-runtime.mjs",
+    "patches",
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "dependencies": {
+    "private-inquiry-subagents-runtime": "file:../private-inquiry-subagents-runtime"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}

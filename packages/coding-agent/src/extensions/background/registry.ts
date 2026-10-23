@@ -19,6 +19,15 @@ import { type ProcessTreeOptions, stopProcessTree } from "./process-tree.ts";
 
 export const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 export const MAX_LOG_BYTES = 50 * 1024;
+
+/**
+ * Emitted on `pi.events` whenever the running task set changes, so other
+ * extensions (the continue watchdog) can treat background shells as activity.
+ */
+export const BACKGROUND_ACTIVITY_EVENT = "pie.background-activity";
+export interface BackgroundActivity {
+	readonly running: number;
+}
 export interface BackgroundTask {
 	id: string;
 	name: string;
