@@ -38,6 +38,9 @@
 			"@earendil-works/pi-env": ["./packages/env/src/index.ts"],
 			"@earendil-works/pi-agent-core": ["./packages/agent/src/index.ts"],
 			"@earendil-works/pi-coding-agent": ["./packages/coding-agent/src/index.ts"],
+			"private-inquiry-subagents-runtime/watchdog-runtime": [
+				"./packages/coding-agent/vendor/private-inquiry-subagents-runtime/build/watchdog-runtime.d.ts"
+			],
 			"@earendil-works/pi-coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
 			"@earendil-works/pi-coding-agent/*": ["./packages/coding-agent/src/*"],
 			"typebox": ["./node_modules/typebox"],

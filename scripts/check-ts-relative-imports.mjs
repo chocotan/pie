@@ -1,5 +1,5 @@
 import { readdirSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { SyntaxKind } from "typescript/unstable/ast";
 import {
 	isCallExpression,
@@ -69,6 +69,9 @@ try {
 
 		function checkSpecifier(node) {
 			if (!isRelativeJavaScriptSpecifier(node.text)) return;
+			// Vendored third-party packages ship compiled JavaScript with its
+			// declarations; their importers reference that output as-is.
+			if (resolve(dirname(file), node.text).includes(`${sep}vendor${sep}`)) return;
 			const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
 			failures.push(`${relative(".", file)}:${line + 1}:${character + 1}: ${node.text}`);
 		}

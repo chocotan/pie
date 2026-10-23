@@ -6,7 +6,7 @@ import {
 	type ProcessDomainEvent,
 	type ProcessDomainNode,
 	type ProcessDomainOpenErrorCode,
-} from "pi-extension-utils/process-domain";
+} from "../../../vendor/pi-extension-utils/build/process-domain/index.js";
 
 export const WATCHDOG_ROOT_PID_ENV = "PI_CONTINUE_WATCHDOG_ROOT_PID";
 export const FATAL_EXIT_CODE = 78;

@@ -301,6 +301,7 @@ export {
 	type SessionInfoEntry,
 	SessionManager,
 	type SessionMessageEntry,
+	type ReadonlySessionManager,
 	type SessionProjection,
 	type SessionTreeNode,
 	sessionEntryToContextMessages,

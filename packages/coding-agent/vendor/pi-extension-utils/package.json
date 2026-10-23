@@ -54,7 +54,7 @@
     }
   },
   "files": [
-    "dist",
+    "build",
     "scripts/prepare-private-runtime.mjs",
     "patches",
     "LICENSE",

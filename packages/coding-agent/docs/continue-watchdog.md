@@ -84,8 +84,9 @@ most 16,384 code points).
 ## Differences from the upstream package
 
 This is [pi-continue-watchdog](https://github.com/xz-dev/pi-continue-watchdog)
-(BSD-3-Clause) built into Pie. Its source is vendored under
-`packages/coding-agent/vendor/`, so no install step is needed.
+(BSD-3-Clause) built into Pie. Its runtime is vendored under
+`packages/coding-agent/vendor/` as a prebuilt module bound to this package's SDK,
+so no install step or extra dependency is needed.
 
 Two behaviours are intentional local changes:
 

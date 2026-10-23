@@ -8,8 +8,8 @@
   "type": "module",
   "exports": {
     "./watchdog-runtime": {
-      "types": "./src/api/watchdog-runtime.d.ts",
-      "import": "./src/api/watchdog-runtime.ts"
+      "types": "./build/watchdog-runtime.d.ts",
+      "import": "./build/watchdog-runtime.js"
     }
   },
   "repository": {

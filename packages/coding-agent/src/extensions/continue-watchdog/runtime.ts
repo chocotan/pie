@@ -13,14 +13,14 @@ import {
 	sessionEntryToContextMessages,
 } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { probePiAgentState } from "pi-extension-utils/pi-agent-state";
+import { probePiAgentState } from "../../../vendor/pi-extension-utils/build/pi-agent-state.js";
 import {
 	createInquiryRuntime,
 	type InquiryAttemptHandle,
 	type InquiryFoldMessage,
-} from "pi-extension-utils/pi-inquiry";
-import { PreemptTakeover } from "pi-extension-utils/preempt-takeover";
-import { createWatchdogRuntime } from "private-inquiry-subagents-runtime/watchdog-runtime";
+} from "../../../vendor/pi-extension-utils/build/pi-inquiry.js";
+import { PreemptTakeover } from "../../../vendor/pi-extension-utils/build/preempt-takeover.js";
+import { createWatchdogRuntime } from "../../../vendor/private-inquiry-subagents-runtime/build/watchdog-runtime.js";
 
 import { type ActivityGeneration, createActivityGraceCoordinator } from "./activity-grace.ts";
 import { isPresentationOnlyMessage } from "./auto-lock.ts";

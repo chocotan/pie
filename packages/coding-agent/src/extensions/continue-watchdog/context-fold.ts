@@ -5,7 +5,7 @@ import {
 	INQUIRY_PROTOCOL_VERSION,
 	type InquiryCorrelation,
 	neutralizeInquiryAssistant,
-} from "pi-extension-utils/pi-inquiry";
+} from "../../../vendor/pi-extension-utils/build/pi-inquiry.js";
 
 import {
 	type ContinueWatchdogEvent,

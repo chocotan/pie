@@ -19,7 +19,7 @@ export { INVALID_ATTEMPT_LIMIT, RESULT_DIR_PREFIX, RESULT_FILE_NAME, RESULT_FILE
  * Bun, Deno). Pi extensions import the runtime subpath from their own source.
  */
 export async function createPrivateRuntime() {
-    const mod = await import("private-inquiry-subagents-runtime/watchdog-runtime");
+    const mod = await import("../../private-inquiry-subagents-runtime/build/watchdog-runtime.js");
     return mod.createWatchdogRuntime();
 }
 // ---------------------------------------------------------------------------
