@@ -1,0 +1,1 @@
+export const PROCESS_DOMAIN_PROTOCOL = 1;

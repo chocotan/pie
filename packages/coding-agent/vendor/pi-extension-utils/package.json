@@ -15,42 +15,42 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./build/index.js",
+  "module": "./build/index.js",
+  "types": "./build/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
     },
     "./process-domain": {
-      "types": "./dist/process-domain/index.d.ts",
-      "import": "./dist/process-domain/index.js"
+      "types": "./build/process-domain/index.d.ts",
+      "import": "./build/process-domain/index.js"
     },
     "./xml": {
-      "types": "./dist/xml.d.ts",
-      "import": "./dist/xml.js"
+      "types": "./build/xml.d.ts",
+      "import": "./build/xml.js"
     },
     "./pi-inquiry": {
-      "types": "./dist/pi-inquiry.d.ts",
-      "import": "./dist/pi-inquiry.js"
+      "types": "./build/pi-inquiry.d.ts",
+      "import": "./build/pi-inquiry.js"
     },
     "./pi-agent-state": {
-      "types": "./dist/pi-agent-state.d.ts",
-      "import": "./dist/pi-agent-state.js"
+      "types": "./build/pi-agent-state.d.ts",
+      "import": "./build/pi-agent-state.js"
     },
     "./semantic-hook": {
-      "types": "./dist/semantic-hook.d.ts",
-      "import": "./dist/semantic-hook.js"
+      "types": "./build/semantic-hook.d.ts",
+      "import": "./build/semantic-hook.js"
     },
     "./preempt-takeover": {
-      "types": "./dist/preempt-takeover.d.ts",
-      "import": "./dist/preempt-takeover.js"
+      "types": "./build/preempt-takeover.d.ts",
+      "import": "./build/preempt-takeover.js"
     },
     "./package.json": "./package.json",
     "./private-inquiry": {
-      "types": "./dist/private-inquiry.d.ts",
-      "import": "./dist/private-inquiry.js"
+      "types": "./build/private-inquiry.d.ts",
+      "import": "./build/private-inquiry.js"
     }
   },
   "files": [
