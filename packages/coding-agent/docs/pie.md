@@ -181,7 +181,7 @@ Subagent children do not load built-in extensions, so the matcher normally selec
 
 ## Compaction model
 
-The `compact-model` plugin lets manual `/compact`, automatic threshold compaction, and context-overflow recovery use a separate summary model. Configure it in `~/.pie/settings.json` or the trusted project's `.pie/settings.json`:
+The `compact-model` plugin lets manual `/compact`, automatic threshold compaction, and context-overflow recovery use a separate summary model. Open `/settings` → **Compaction model** to select an available model or **Follow current model**. The selection is saved globally and applies to the next compaction without reloading; trusted project settings still take precedence. You can also configure it in `~/.pie/settings.json` or the trusted project's `.pie/settings.json`:
 
 ```json
 {

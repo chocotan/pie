@@ -830,6 +830,19 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getCompactModel(): string | null {
+		return this.settings.compactModel ?? null;
+	}
+
+	setCompactModel(model: string | null): void {
+		if (model !== null && !/^[^/\s]+\/\S+$/.test(model)) {
+			throw new Error('compactModel must be "provider/modelId" or null');
+		}
+		this.globalSettings.compactModel = model;
+		this.markModified("compactModel");
+		this.save();
+	}
+
 	private getCompactionTokenSetting(
 		field: keyof CompactionModelOverride,
 		model?: Pick<Model<string>, "provider" | "id">,

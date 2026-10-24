@@ -60,6 +60,7 @@ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 
 export interface SettingsConfig {
 	autoCompact: boolean;
+	compactModel?: string | null;
 	defaultModel: string;
 	currentModel?: Model<any>;
 	availableDefaultModels: readonly Model<any>[];
@@ -105,6 +106,7 @@ export interface SettingsConfig {
 
 export interface SettingsCallbacks {
 	onAutoCompactChange: (enabled: boolean) => void;
+	onCompactModelChange: (model: string | null) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onImageWidthCellsChange: (width: number) => void;
 	onAutoResizeImagesChange: (enabled: boolean) => void;
@@ -489,6 +491,37 @@ export class SettingsSelectorComponent extends Container {
 				description: "Automatically compact context when it gets too large",
 				currentValue: config.autoCompact ? "true" : "false",
 				values: ["true", "false"],
+			},
+			{
+				id: "compact-model",
+				label: "Compaction model",
+				description: "Model for manual and automatic compaction (requires builtin:compact-model)",
+				currentValue: config.compactModel ?? "current model",
+				submenu: (currentValue, done) => {
+					const options: SelectItem[] = [
+						{ value: "current model", label: "Follow current model", description: "Use the conversation model" },
+						...config.availableDefaultModels.map((model) => ({
+							value: modelSettingKey(model),
+							label: modelItemLabel(model),
+						})),
+					];
+					if (!options.some((option) => option.value === currentValue)) {
+						options.push({ value: currentValue, label: currentValue, description: "Currently unavailable" });
+					}
+					return new SelectSubmenu(
+						"Compaction Model",
+						"Select a summary model, or follow the current conversation model.",
+						options,
+						currentValue,
+						(value) => {
+							callbacks.onCompactModelChange(value === "current model" ? null : value);
+							done(value);
+						},
+						() => done(),
+						undefined,
+						{ searchable: true, layout: MODEL_PICKER_LAYOUT },
+					);
+				},
 			},
 			{
 				id: "steering-mode",

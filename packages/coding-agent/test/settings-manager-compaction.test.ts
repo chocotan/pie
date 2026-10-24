@@ -5,6 +5,37 @@ const model = { provider: "provider", id: "family/model" };
 const modelKey = "provider/family/model";
 const defaults = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 };
 
+describe("compaction model selection", () => {
+	it("saves the selection and explicit follow-current null without changing token budgets", async () => {
+		const manager = SettingsManager.inMemory({ compaction: { reserveTokens: 400000 } });
+		expect(manager.getCompactModel()).toBeNull();
+		manager.setCompactModel(modelKey);
+		await manager.flush();
+		await manager.reload();
+		expect(manager.getCompactModel()).toBe(modelKey);
+		expect(manager.getCompactionReserveTokens()).toBe(400000);
+		manager.setCompactModel(null);
+		await manager.flush();
+		await manager.reload();
+		expect(manager.getGlobalSettings().compactModel).toBeNull();
+	});
+
+	it.each(["", "model", "/model", "provider/", "provider/model name"])("rejects invalid selection %j", (value) => {
+		const manager = SettingsManager.inMemory();
+		expect(() => manager.setCompactModel(value)).toThrow("compactModel must be");
+	});
+
+	it("respects project overrides and project trust", () => {
+		const storage = new InMemorySettingsStorage();
+		storage.withLock("global", () => JSON.stringify({ compactModel: modelKey }));
+		storage.withLock("project", () => JSON.stringify({ compactModel: null }));
+		const manager = SettingsManager.fromStorage(storage);
+		expect(manager.getCompactModel()).toBeNull();
+		manager.setProjectTrusted(false);
+		expect(manager.getCompactModel()).toBe(modelKey);
+	});
+});
+
 // Regression coverage for #8133.
 describe("compaction model overrides", () => {
 	it("uses defaults without compaction settings", () => {
