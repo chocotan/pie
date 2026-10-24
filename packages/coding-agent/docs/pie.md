@@ -41,6 +41,7 @@ Built-ins load by default in the CLI:
 - `builtin:usage`
 - `builtin:background`
 - `builtin:retry`
+- `builtin:compact-model`
 
 Disable individual plugins in `~/.pie/settings.json`:
 
@@ -177,6 +178,22 @@ Permanent failures (invalid key, unknown model) and quota, session-limit, or bud
 Context overflow is never retried in place: compaction reduces the context and retries once. Providers strip a failed assistant turn from the request payload, so in the default mode the retry re-sends the same request with one hidden message; with `messageFreeRetries: true` the failed response is removed from the model projection instead. Either way the failed attempt stays in the session file.
 
 Subagent children do not load built-in extensions, so the matcher normally selects ordinary sessions; a child created by an extension that itself loads this plugin is matched by its own system prompt. The port is adapted from [pi-retry](https://github.com/monotykamary/pi-retry) 0.11.2; its [MIT notice and the list of deliberate differences](third-party/pi-retry/NOTICE.md) are included. Disable it with `-builtin:retry` or replace it with another plugin registering `/retry`.
+
+## Compaction model
+
+The `compact-model` plugin lets manual `/compact`, automatic threshold compaction, and context-overflow recovery use a separate summary model. Configure it in `~/.pie/settings.json` or the trusted project's `.pie/settings.json`:
+
+```json
+{
+  "compactModel": "google/gemini-2.5-flash"
+}
+```
+
+Use an exact `provider/modelId` from the model registry, including custom models from `models.json`. The provider uses its usual configured credentials. The selected model must have enough context for the summary request. The conversation model stays selected; its compaction thresholds and recent-message retention still apply. The default summary format, previous summary, custom `/compact` instructions, file tracking, usage accounting, cancellation, and transient-error retry policy are preserved. The summary model uses its `modelThinkingLevels` override when present, otherwise the session thinking level.
+
+Omit `compactModel` or set it to `null` to use the session model. Project settings override the global value; `null` clears an inherited choice. After editing settings, run `/reload`. An invalid setting, unknown model, authentication error, empty or incomplete summary, or failed request produces a warning and falls back to default compaction. Cancellation stops without falling back. Branch summaries from `/tree` are unaffected.
+
+Disable the plugin with `"extensions": ["-builtin:compact-model"]` or `--no-extensions`. When using another extension that generates compaction summaries, disable this plugin to avoid duplicate requests.
 
 ## Background shell jobs
 

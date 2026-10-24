@@ -184,6 +184,16 @@ describe("generated configuration schemas", () => {
 		}
 	});
 
+	it("validates the compaction model selection", () => {
+		const validator = Compile(SettingsSchema);
+		for (const compactModel of [null, "google/gemini-2.5-flash", "openrouter/vendor/model"]) {
+			expect(validator.Check({ compactModel })).toBe(true);
+		}
+		for (const compactModel of ["", "model", "/model", "provider/", "provider/model name", 42, {}]) {
+			expect(validator.Check({ compactModel })).toBe(false);
+		}
+	});
+
 	it("rejects settings values that runtime accessors reject", () => {
 		const validator = Compile(SettingsSchema);
 		for (const invalid of [
