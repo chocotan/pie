@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Todo and Subagents floating panels now show at most five items, with a view-all entrance for the remaining records.
 - Background task and subagent completion notifications now show compact, expandable status summaries instead of transport type names and raw JSON.
 - `generateSummary()` and `generateSummaryWithUsage()` now ignore their `reserveTokens` parameter. Summary requests use the model's output limit instead.
 

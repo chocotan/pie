@@ -47,7 +47,7 @@ export class TodoPanel implements Component {
 		const state = this.getState();
 		const done = state.tasks.filter((task) => task.status === "completed").length;
 		this.moreRow = undefined;
-		const tasks = sortTasks(state.tasks).slice(0, 10);
+		const tasks = sortTasks(state.tasks).slice(0, 5);
 		const hidden = state.tasks.length - tasks.length;
 		const inner = Math.max(1, width - 4);
 		const title = truncateToWidth(

@@ -45,7 +45,7 @@ export class SubagentPanel implements Component {
 		this.rows = [];
 		if (!this.records.length || width < 1) return [];
 		const sorted = sortSubagents(this.records);
-		const count = Math.min(10, sorted.length, Math.max(1, Math.floor(this.ui.terminal.rows * 0.35) - 2));
+		const count = Math.min(5, sorted.length, Math.max(1, Math.floor(this.ui.terminal.rows * 0.35) - 2));
 		const records = sorted.slice(0, count);
 		const hidden = sorted.length - count;
 		if (!records.some((record) => ["running", "queued"].includes(record.status))) this.dispose();

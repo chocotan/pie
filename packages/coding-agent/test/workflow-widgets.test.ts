@@ -81,8 +81,8 @@ describe("workflow floating and inline widgets", () => {
 			],
 		};
 		text = stripAnsi(panel.render(80).join("\n"));
-		expect(text).not.toContain("hidden");
-		expect(text).toContain("Todo · 7/7");
+		expect(text).toContain("+2 hidden · view all");
+		expect(text).toContain("Todo · 5/7");
 		expect(text).not.toContain("Done 0");
 		expect(text).toContain("Open 0");
 		panel.handleMouse(mouse(76, 0));
@@ -153,7 +153,7 @@ describe("workflow floating and inline widgets", () => {
 			}
 		},
 	);
-	it.each([5, 10, 11, 20])("caps subagent rows at ten with a working overflow entrance (%s total)", (total) => {
+	it.each([4, 5, 6, 10, 20])("caps subagent rows at five with a working overflow entrance (%s total)", (total) => {
 		const records: SubagentRecord[] = Array.from({ length: total }, (_, index) => ({
 			id: String(index),
 			agent: "worker",
@@ -176,7 +176,7 @@ describe("workflow floating and inline widgets", () => {
 			vi.fn(),
 		);
 		const rows = panel.render(80).map(stripAnsi);
-		const visible = Math.min(10, total);
+		const visible = Math.min(5, total);
 		expect(rows[0]).toContain(`${visible}/${total}`);
 		expect(rows.filter((line) => line.includes("●"))).toHaveLength(visible);
 		panel.handleMouse(mouse(3, visible));
@@ -189,7 +189,7 @@ describe("workflow floating and inline widgets", () => {
 		}
 		panel.dispose();
 	});
-	it.each([5, 10, 11, 20])("caps Todo entries at ten with a working overflow entrance (%s total)", (total) => {
+	it.each([4, 5, 6, 10, 20])("caps Todo entries at five with a working overflow entrance (%s total)", (total) => {
 		const state: TaskState = {
 			nextId: total + 1,
 			tasks: Array.from({ length: total }, (_, index) => ({
@@ -211,7 +211,7 @@ describe("workflow floating and inline widgets", () => {
 			more,
 		);
 		const rows = panel.render(80).map(stripAnsi);
-		const visible = Math.min(10, total);
+		const visible = Math.min(5, total);
 		expect(rows[0]).toContain(`${visible}/${total}`);
 		expect(rows.filter((line) => line.includes("#"))).toHaveLength(visible);
 		if (total > visible) {
@@ -365,8 +365,8 @@ describe("workflow floating and inline widgets", () => {
 			close,
 		);
 		const mixedText = stripAnsi(mixed.render(80).join("\n"));
-		expect(mixedText).toContain("Subagents · 6/7");
-		expect(mixedText).toContain("+1 hidden");
+		expect(mixedText).toContain("Subagents · 5/7");
+		expect(mixedText).toContain("+2 hidden");
 		expect(mixedText).toContain("Running 0");
 		const crowded = new SubagentPanel(
 			ui,
