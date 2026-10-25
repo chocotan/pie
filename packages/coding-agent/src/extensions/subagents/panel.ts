@@ -72,7 +72,9 @@ export class SubagentPanel implements Component {
 			const end =
 				record.finishedAt ??
 				(record.status === "running" || record.status === "queued" ? Date.now() : record.startedAt);
-			const duration = ` ${Math.max(0, Math.floor((end - record.startedAt) / 1000))}s`;
+			const progress =
+				record.turns !== undefined && record.maxTurns !== undefined ? ` ${record.turns}/${record.maxTurns}` : "";
+			const duration = `${progress} ${Math.max(0, Math.floor((end - record.startedAt) / 1000))}s`;
 			const description = truncateToWidth(
 				record.description || record.agent,
 				Math.max(0, inner - duration.length - 2),

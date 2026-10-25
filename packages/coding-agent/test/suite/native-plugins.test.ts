@@ -276,6 +276,8 @@ describe("native subagents plugin", () => {
 			expect(result.details).toMatchObject({
 				status: "stopped",
 				stopReason: "Subagent turn limit reached",
+				turns: 1,
+				maxTurns: 1,
 			});
 			expect((result.details as SubagentRecord).error).toBeUndefined();
 			expect(result.content).toEqual([
@@ -341,6 +343,16 @@ describe("native subagents plugin", () => {
 				content: expect.stringContaining("Subagent turn limit reached"),
 				details: { status: "stopped", stopReason: "Subagent turn limit reached" },
 			});
+			const notification = harness.session.messages.find(
+				(message) => message.role === "custom" && message.customType === "pie.subagent-completion",
+			);
+			if (!notification || notification.role !== "custom") throw new Error("Missing subagent notification");
+			initTheme("dark");
+			const renderer = harness.session.extensionRunner.getMessageRenderer(notification.customType)!;
+			const rendered = renderer(notification, { expanded: false, outputPad: 1 }, theme)!.render(80);
+			expect(stripAnsi(rendered.join("\n"))).toContain("Subagent · stopped");
+			expect(stripAnsi(rendered.join("\n"))).toContain("Subagent turn limit reached");
+			expect(stripAnsi(rendered.join("\n"))).not.toContain("pie.subagent-completion");
 		} finally {
 			harness.cleanup();
 		}
@@ -466,6 +478,8 @@ describe("native subagents plugin", () => {
 			const record = result.details as SubagentRecord;
 			expect(result.isError).toBe(false);
 			expect(record.status).toBe("completed");
+			expect(record.turns).toBe(1);
+			expect(record.maxTurns).toBe(1);
 			expect(record.output).toBe("child result");
 			initTheme("dark");
 			const factory = setWidget.mock.calls.at(-1)![1];

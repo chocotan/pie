@@ -4634,7 +4634,9 @@ export class InteractiveMode {
 
 		this.toolOutputExpanded = expanded;
 		for (const child of this.chatContainer.children) {
-			if (child instanceof ToolExecutionComponent) child.setExpanded(expanded);
+			if (child instanceof ToolExecutionComponent || child instanceof CustomMessageComponent) {
+				child.setExpanded(expanded);
+			}
 		}
 		this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
 	}

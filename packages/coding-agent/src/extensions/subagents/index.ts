@@ -22,7 +22,7 @@ import { raceWithAbortSignal } from "../../utils/abort.ts";
 import { readTaskState, TASK_RUN_EVENT } from "../tasks/index.ts";
 import { discoverAgentDefinitions } from "./definitions.ts";
 import { SubagentPanel } from "./panel.ts";
-import { renderSubagentCall } from "./renderers.ts";
+import { renderSubagentCall, renderSubagentCompletion } from "./renderers.ts";
 import { SubagentDetailView } from "./view.ts";
 
 export const SUBAGENT_ENTRY = "pie.subagent";
@@ -35,6 +35,8 @@ const recordSchema = Type.Object({
 	status: StringEnum(["queued", "running", "completed", "error", "stopped", "interrupted"] as const),
 	model: Type.String(),
 	thinking: Type.String(),
+	turns: Type.Optional(Type.Integer({ minimum: 0 })),
+	maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
 	startedAt: Type.Number(),
 	finishedAt: Type.Optional(Type.Number()),
 	sessionFile: Type.Optional(Type.String()),
@@ -80,6 +82,7 @@ const codingToolNames = new Set(["read", "bash", "edit", "write", "grep", "find"
 
 export function createSubagentsExtension(options: { agentDir?: string } = {}): ExtensionFactory {
 	return (pi) => {
+		pi.registerMessageRenderer("pie.subagent-completion", renderSubagentCompletion);
 		const agentDir = options.agentDir ?? getAgentDir();
 		const records = new Map<string, SubagentRecord>();
 		const runs = new Map<string, Run>();
@@ -353,6 +356,8 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 				description: args.description ?? definition.description,
 				prompt: args.prompt,
 				status: "queued",
+				turns: 0,
+				maxTurns: args.max_turns ?? 30,
 				startedAt: Date.now(),
 				output: "",
 				model: `${model.provider}/${model.id}`,
@@ -446,6 +451,11 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						refresh();
 						let turns = 0;
 						child.subscribe((event) => {
+							if (event.type === "turn_start") {
+								record.turns = Math.min((record.turns ?? 0) + 1, record.maxTurns ?? 30);
+								save(record);
+								refresh();
+							}
 							if (event.type === "message_update" && event.message.role === "assistant")
 								run.streaming = event.message;
 							if (event.type === "message_end") run.streaming = undefined;

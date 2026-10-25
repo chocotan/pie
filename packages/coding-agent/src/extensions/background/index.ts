@@ -16,6 +16,7 @@ import {
 	MAX_LOG_BYTES,
 	readTaskLogs,
 } from "./registry.ts";
+import { renderBackgroundCompletion } from "./renderers.ts";
 import { BackgroundDetailView, BackgroundPanel } from "./view.ts";
 
 const runSchema = Type.Object({
@@ -50,6 +51,7 @@ export function assertLocalShell(pi: ExtensionAPI, ctx: ExtensionToolContext, sh
 
 export function createBackgroundExtension(options: { agentDir?: string } = {}): ExtensionFactory {
 	return (pi) => {
+		pi.registerMessageRenderer("background-task-notification", renderBackgroundCompletion);
 		let registry: BackgroundRegistry | undefined;
 		let context: ExtensionContext | undefined;
 		let dismissed = false;

@@ -5,6 +5,8 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBackgroundExtension } from "../../src/extensions/background/index.ts";
+import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../../src/utils/ansi.ts";
 import { createHarness, createTestUiContext, getToolResult, type Harness } from "./harness.ts";
 
 let directory: string;
@@ -85,6 +87,17 @@ describe("background extension tool integration", () => {
 						event.message.role === "custom" && event.message.customType === "background-task-notification",
 				),
 		).toHaveLength(1);
+		const notification = harness.session.messages.find(
+			(message) => message.role === "custom" && message.customType === "background-task-notification",
+		);
+		if (!notification || notification.role !== "custom") throw new Error("Missing background notification");
+		expect(notification.content).toContain("<background-task-notification>");
+		expect(notification.content).toContain("do not poll bg_status to reconfirm");
+		initTheme("dark");
+		const renderer = harness.session.extensionRunner.getMessageRenderer(notification.customType)!;
+		const rendered = renderer(notification, { expanded: false, outputPad: 1 }, theme)!.render(80);
+		expect(stripAnsi(rendered.join("\n"))).toContain("Background task · completed");
+		expect(stripAnsi(rendered.join("\n"))).not.toContain("background-task-notification");
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("bg_logs", { taskId: task.id }), { stopReason: "toolUse" }),
 			fauxAssistantMessage("read output"),

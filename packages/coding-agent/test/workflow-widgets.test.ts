@@ -321,6 +321,8 @@ describe("workflow floating and inline widgets", () => {
 			startedAt: 0,
 			finishedAt: 4000,
 			output: "done",
+			turns: 3,
+			maxTurns: 30,
 		};
 		const open = vi.fn();
 		const more = vi.fn();
@@ -337,6 +339,7 @@ describe("workflow floating and inline widgets", () => {
 		expect(rows[1]).toContain("Verify terminal layout");
 		expect(rows[2]).toContain("Review tool titles");
 		expect(rows[2]).toContain("4s");
+		expect(rows[2]).toContain("Review tool titles 3/30 4s");
 		panel.handleMouse(mouse(3, 2));
 		expect(open).toHaveBeenCalledWith(record);
 		panel.handleMouse(mouse(76, 0));
