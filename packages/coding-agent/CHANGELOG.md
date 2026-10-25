@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a floating task-details view when opening a Todo item in the TUI.
 - Added the continue watchdog as a built-in extension: after a run settles and stays idle for ten seconds it asks the model in a private forked session whether to continue or stop, then continues in the main session within a shared budget. It is off by default and enabled per session with `/lock-continue-watchdog`; `/unlock-continue-watchdog` never aborts a running continuation. See [Continue watchdog](docs/continue-watchdog.md)
 - Added a Models Configuration reference generated from the `models.json` schema, listing all provider, model, model override, and compatibility fields ([#10790](https://github.com/earendil-works/pi/issues/10790))
 
@@ -13,6 +14,7 @@
 
 ### Fixed
 
+- Fixed subagent turn-limit stops and their cancellation diagnostics being displayed as red execution errors, while preserving the existing abort and completion notification flow.
 - Fixed compaction and branch summaries failing with "generation hit the token cap" when reasoning used most of the fixed summary output limit. Summaries now use the model's output limit, and `compaction.reserveTokens` only controls when compaction starts ([#9512](https://github.com/earendil-works/pi/issues/9512), [#9075](https://github.com/earendil-works/pi/issues/9075)).
 - Fixed `models.schema.json` missing descriptions for provider and model fields, so editors showed no hints for them ([#10790](https://github.com/earendil-works/pi/issues/10790))
 

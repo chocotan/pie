@@ -2,8 +2,8 @@ import { type TUI, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-t
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { SubagentRecord } from "../src/extensions/subagents/index.ts";
 import { SubagentPanel } from "../src/extensions/subagents/panel.ts";
-import type { TaskState } from "../src/extensions/tasks/index.ts";
-import { TodoPanel } from "../src/extensions/tasks/view.ts";
+import type { TaskRecord, TaskState } from "../src/extensions/tasks/index.ts";
+import { TaskDetailView, TodoPanel } from "../src/extensions/tasks/view.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -88,6 +88,71 @@ describe("workflow floating and inline widgets", () => {
 		panel.handleMouse(mouse(76, 0));
 		expect(close).toHaveBeenCalledOnce();
 	});
+	it("renders task details in a bounded, scrollable view and closes with the configured cancel key", () => {
+		const done = vi.fn();
+		const requestRender = vi.fn();
+		const task: TaskRecord = {
+			id: "7",
+			subject: "Review the implementation",
+			description: Array.from({ length: 40 }, (_, index) => `Requirement line ${index + 1}`).join("\n"),
+			activeForm: "Reviewing implementation",
+			agentType: "reviewer",
+			owner: "worker-1",
+			status: "in_progress",
+			blockedBy: ["2", "3"],
+			metadata: {},
+		};
+		const detail = new TaskDetailView({ terminal: { rows: 15 }, requestRender } as unknown as TUI, task, done);
+		for (const width of [1, 2, 10, 20, 40, 80]) {
+			const lines = detail.render(width);
+			expect(lines).toHaveLength(12);
+			expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+		}
+		let rendered = stripAnsi(detail.render(80).join("\n"));
+		expect(rendered).toContain("Review the implementation");
+		expect(rendered).toContain("Requirement line 1");
+		expect(rendered).not.toContain("Requirement line 20");
+		detail.handleMouse({ ...mouse(0, 0), type: "wheel", button: "none", wheelDelta: 20 });
+		rendered = stripAnsi(detail.render(80).join("\n"));
+		expect(rendered).toContain("Requirement line 20");
+		expect(rendered).not.toContain("Requirement line 1\n");
+		detail.handleMouse({ ...mouse(0, 0), type: "wheel", button: "none", wheelDelta: 40 });
+		rendered = stripAnsi(detail.render(80).join("\n"));
+		expect(rendered).toContain("Current step: Reviewing implementation");
+		expect(rendered).toContain("Blocked by: #2, #3");
+		detail.handleInput("\x1b");
+		expect(done).toHaveBeenCalledOnce();
+		detail.handleMouse(mouse(76, 0));
+		expect(done).toHaveBeenCalledTimes(2);
+		expect(requestRender).toHaveBeenCalled();
+	});
+	it.each([10, 12, 24, 41])(
+		"keeps the task footer and last detail visible within an 80%% overlay (%s terminal rows)",
+		(rows) => {
+			const terminal = { rows };
+			const detail = new TaskDetailView(
+				{ terminal, requestRender: vi.fn() } as unknown as TUI,
+				{
+					id: "1",
+					subject: "Long task",
+					description: "A detailed requirement\n".repeat(40),
+					status: "pending",
+					blockedBy: ["2"],
+					metadata: {},
+				},
+				vi.fn(),
+			);
+			for (const height of [rows, rows + 3, rows]) {
+				terminal.rows = height;
+				detail.handleMouse({ ...mouse(0, 0), type: "wheel", button: "none", wheelDelta: 1000 });
+				const lines = detail.render(60).map(stripAnsi);
+				expect(lines).toHaveLength(Math.floor(height * 0.8));
+				expect(lines.slice(2, -2).join("\n")).toContain("Blocked by: #2");
+				expect(lines.at(-2)).toContain("scroll · escape/ctrl+c close");
+				expect(lines.at(-1)).toMatch(/^╰─+╯$/);
+			}
+		},
+	);
 	it.each([5, 10, 11, 20])("caps subagent rows at ten with a working overflow entrance (%s total)", (total) => {
 		const records: SubagentRecord[] = Array.from({ length: total }, (_, index) => ({
 			id: String(index),

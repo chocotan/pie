@@ -8,8 +8,11 @@ import {
 	getSystemMessageText,
 } from "@earendil-works/pi-ai";
 import type { TUI } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { AgentSession } from "../../src/core/agent-session.ts";
 import type { EventBus } from "../../src/core/event-bus.ts";
+import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import { createSubagentsExtension, type SubagentRecord } from "../../src/extensions/subagents/index.ts";
 import tasksPlugin, {
@@ -176,9 +179,196 @@ describe("native tasks plugin", () => {
 			harness.cleanup();
 		}
 	});
+	it("opens clicked Todo details in an overlay without appending a JSON chat message", async () => {
+		initTheme("dark");
+		const harness = await createHarness({ extensionFactories: [tasksPlugin] });
+		const setWidget = vi.fn();
+		const uiContext = createTestUiContext({ setWidget });
+		const custom = vi.spyOn(uiContext, "custom");
+		try {
+			harness.sessionManager.appendCustomEntry(TASK_STATE_ENTRY, {
+				nextId: 2,
+				tasks: [{ ...task("1"), metadata: { priority: "high", checks: { passed: 3 } } }],
+			});
+			await harness.session.bindExtensions({ mode: "tui", uiContext });
+			const tui = { terminal: { rows: 24 }, requestRender: vi.fn() } as unknown as TUI;
+			const panel = setWidget.mock.calls.at(-1)![1](tui, theme);
+			panel.render(80);
+			panel.handleMouse({
+				type: "click",
+				button: "left",
+				x: 3,
+				y: 1,
+				screenX: 3,
+				screenY: 1,
+				width: 80,
+				height: 24,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			});
+			expect(custom).toHaveBeenCalledOnce();
+			const [factory, options] = custom.mock.calls[0];
+			expect(options).toMatchObject({ overlay: true, overlayOptions: { maxHeight: "80%" } });
+			const detail = await factory(tui, theme, new KeybindingsManager(), vi.fn());
+			const lines = detail.render(60).map(stripAnsi);
+			expect(lines).toHaveLength(19);
+			expect(lines.join("\n")).toContain("Verify the result");
+			expect(lines.join("\n")).toContain("priority: high");
+			expect(lines.join("\n")).toContain('"passed": 3');
+			expect(
+				harness.session.messages.some(
+					(message) => message.role === "custom" && message.customType === "pie.task-detail",
+				),
+			).toBe(false);
+		} finally {
+			harness.cleanup();
+		}
+	});
 });
 
 describe("native subagents plugin", () => {
+	it.each(["Agent", "TaskExecute"])("stops %s at the turn limit without an execution error", async (toolName) => {
+		const abort = vi.spyOn(AgentSession.prototype, "abort");
+		const read = vi.fn(async () => ({
+			content: [{ type: "text" as const, text: "file contents" }],
+			details: undefined,
+		}));
+		const harness = await createHarness({
+			extensionFactories: [tasksPlugin, subagents()],
+			tools: [
+				{ name: "read", label: "Read", description: "Read a file", parameters: Type.Object({}), execute: read },
+			],
+		});
+		try {
+			await harness.session.bindExtensions({});
+			harness.sessionManager.appendCustomEntry(TASK_STATE_ENTRY, {
+				nextId: 2,
+				tasks: [{ ...task("1"), agentType: "worker" }],
+			});
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall(
+						toolName,
+						toolName === "Agent"
+							? { prompt: "Read a file", max_turns: 1, run_in_background: false }
+							: { task_ids: ["1"], max_turns: 1 },
+					),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([{ type: "text", text: "Partial findings" }, fauxToolCall("read", {})], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("Parent done"),
+				fauxAssistantMessage("Must not request another turn"),
+			]);
+			await harness.session.prompt("Delegate a file read");
+			const ctx = harness.session.extensionRunner.createToolContext("limit-test", undefined);
+			const result =
+				toolName === "Agent"
+					? getToolResult(harness, "Agent")
+					: await harness.session
+							.getToolDefinition("TaskOutput")!
+							.execute("output", { task_id: "1" }, undefined, undefined, ctx);
+			if (toolName === "TaskExecute") expect(readTaskState(harness.sessionManager).tasks[0].status).toBe("pending");
+			expect(result.isError).toBe(false);
+			expect(result.details).toMatchObject({
+				status: "stopped",
+				stopReason: "Subagent turn limit reached",
+			});
+			expect((result.details as SubagentRecord).error).toBeUndefined();
+			expect(result.content).toEqual([
+				{ type: "text", text: expect.stringContaining("Subagent turn limit reached") },
+			]);
+			expect(abort).toHaveBeenCalledOnce();
+			expect(read).toHaveBeenCalledOnce();
+			expect(harness.getPendingResponseCount()).toBe(1);
+		} finally {
+			abort.mockRestore();
+			harness.cleanup();
+		}
+	});
+	it("still delivers the automatic background notification after a turn-limit abort", async () => {
+		const harness = await createHarness({
+			extensionFactories: [subagents()],
+			tools: [
+				{
+					name: "read",
+					label: "Read",
+					description: "Read a file",
+					parameters: Type.Object({}),
+					execute: async () => ({ content: [{ type: "text", text: "file contents" }], details: undefined }),
+				},
+			],
+		});
+		const response: FauxResponseFactory = (context) => {
+			const system = context.messages.find((message) => message.role === "system");
+			return system?.role === "system" &&
+				getSystemMessageText(system).includes("You are an isolated worker subagent")
+				? fauxAssistantMessage(fauxToolCall("read", {}), { stopReason: "toolUse" })
+				: fauxAssistantMessage("Parent done");
+		};
+		try {
+			await harness.session.bindExtensions({ mode: "rpc", uiContext: createTestUiContext() });
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall("Agent", { prompt: "Read a file", max_turns: 1, run_in_background: true }),
+					{ stopReason: "toolUse" },
+				),
+				response,
+				response,
+				response,
+				response,
+			]);
+			await harness.session.prompt("Delegate in the background");
+			const record = getToolResult(harness, "Agent").details as SubagentRecord;
+			await harness.session
+				.getToolDefinition("get_subagent_result")!
+				.execute(
+					"join",
+					{ agent_id: record.id, wait: true },
+					undefined,
+					undefined,
+					harness.session.extensionRunner.createToolContext("join", undefined),
+				);
+			await harness.session.waitForIdle();
+			expect(
+				harness.session.messages.find(
+					(message) => message.role === "custom" && message.customType === "pie.subagent-completion",
+				),
+			).toMatchObject({
+				content: expect.stringContaining("Subagent turn limit reached"),
+				details: { status: "stopped", stopReason: "Subagent turn limit reached" },
+			});
+		} finally {
+			harness.cleanup();
+		}
+	});
+	it("keeps provider failures classified as execution errors", async () => {
+		const harness = await createHarness({
+			extensionFactories: [subagents()],
+			settings: { retry: { enabled: false } },
+		});
+		try {
+			await harness.session.bindExtensions({});
+			harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid API key" })]);
+			const result = await harness.session
+				.getToolDefinition("Agent")!
+				.execute(
+					"failed",
+					{ prompt: "Return a result", max_turns: 1, run_in_background: false },
+					undefined,
+					undefined,
+					harness.session.extensionRunner.createToolContext("failure-test", undefined),
+				);
+			expect(result.isError).toBe(true);
+			expect(result.details).toMatchObject({ status: "error", error: "Invalid API key" });
+			expect((result.details as SubagentRecord).stopReason).toBeUndefined();
+		} finally {
+			harness.cleanup();
+		}
+	});
 	it("allows a new delegation after tree navigation is cancelled", async () => {
 		const harness = await createHarness({
 			extensionFactories: [
@@ -263,6 +453,7 @@ describe("native subagents plugin", () => {
 					fauxToolCall("Agent", {
 						prompt: "Return a bounded result",
 						description: "Inspect auth flow",
+						max_turns: 1,
 						run_in_background: false,
 					}),
 					{ stopReason: "toolUse" },

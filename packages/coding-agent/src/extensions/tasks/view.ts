@@ -1,5 +1,7 @@
 import {
 	type Component,
+	getKeybindings,
+	Text,
 	type TUI,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
@@ -8,6 +10,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { highlightHover } from "../../modes/interactive/components/hover-style.ts";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { theme } from "../../modes/interactive/theme/theme.ts";
 import { sortTasks, type TaskRecord, type TaskState } from "./index.ts";
 
@@ -127,5 +130,96 @@ export class TodoPanel implements Component {
 		else if (more) this.more();
 		else if (task) this.select(task);
 		return { handled: true };
+	}
+}
+
+/** Readable task details shown without adding a JSON message to the conversation. */
+export class TaskDetailView implements Component {
+	private readonly ui: TUI;
+	private readonly done: () => void;
+	private readonly keys = getKeybindings();
+	private readonly content: Text;
+	private readonly lines: string[];
+	private scrollTop = 0;
+	private bodyHeight = 0;
+	private width = 0;
+	private closeHovered = false;
+
+	constructor(ui: TUI, task: TaskRecord, done: () => void) {
+		this.ui = ui;
+		this.done = done;
+		this.content = new Text(
+			[
+				theme.fg("accent", `#${task.id} · ${task.status}`),
+				theme.bold(task.subject),
+				task.description,
+				task.activeForm ? `Current step: ${task.activeForm}` : "",
+				task.agentType ? `Agent: ${task.agentType}` : "",
+				task.owner ? `Owner: ${task.owner}` : "",
+				task.blockedBy.length ? `Blocked by: ${task.blockedBy.map((id) => `#${id}`).join(", ")}` : "",
+				...Object.entries(task.metadata).map(
+					([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value, null, 2)}`,
+				),
+			]
+				.filter(Boolean)
+				.join("\n\n"),
+			0,
+			0,
+		);
+		this.lines = [];
+	}
+	handleInput(data: string): void {
+		if (this.keys.matches(data, "tui.select.cancel")) this.done();
+		else if (this.keys.matches(data, "tui.select.up")) this.scrollTop = Math.max(0, this.scrollTop - 1);
+		else if (this.keys.matches(data, "tui.select.down")) this.scrollTop++;
+		else if (this.keys.matches(data, "tui.select.pageUp"))
+			this.scrollTop = Math.max(0, this.scrollTop - this.bodyHeight);
+		else if (this.keys.matches(data, "tui.select.pageDown")) this.scrollTop += this.bodyHeight;
+		this.ui.requestRender();
+	}
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		const closing = event.y === 0 && event.x >= Math.max(0, this.width - 6);
+		if (event.type === "move" || event.type === "leave") {
+			const hovered = event.type === "move" && event.button === "none" && closing;
+			const changed = hovered !== this.closeHovered;
+			this.closeHovered = hovered;
+			return hovered || changed ? { handled: true, render: changed } : undefined;
+		}
+		if (event.button === "left" && closing) {
+			if (event.type === "press") return { handled: true, render: false };
+			if (event.type === "click") {
+				this.done();
+				return { handled: true };
+			}
+		}
+		if (event.type !== "wheel") return undefined;
+		this.scrollTop = Math.max(0, this.scrollTop + (event.wheelDelta ?? 0));
+		this.ui.requestRender();
+		return { handled: true };
+	}
+	invalidate(): void {
+		this.content.invalidate();
+	}
+	render(width: number): string[] {
+		this.width = width;
+		const inner = Math.max(0, width - 4);
+		const height = Math.max(1, Math.floor(this.ui.terminal.rows * 0.8));
+		this.bodyHeight = Math.max(0, height - 4);
+		this.lines.splice(0, this.lines.length, ...this.content.render(inner));
+		this.scrollTop = Math.min(this.scrollTop, Math.max(0, this.lines.length - this.bodyHeight));
+		const title = truncateToWidth(theme.bold("Task details"), Math.max(0, width - 8), "…");
+		const close = this.closeHovered ? highlightHover("[x]") : "[x]";
+		const frame = (line: string) => {
+			const text = truncateToWidth(line, inner, "");
+			return `│ ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} │`;
+		};
+		const rows = [
+			`╭ ${title}${" ".repeat(Math.max(0, width - visibleWidth(title) - 7))}${close} ╮`,
+			frame(""),
+			...Array.from({ length: this.bodyHeight }, (_, index) => frame(this.lines[this.scrollTop + index] ?? "")),
+			frame(theme.fg("muted", `↑/↓ scroll · ${keyHint("tui.select.cancel", "close")}`)),
+			`╰${"─".repeat(Math.max(0, width - 2))}╯`,
+		];
+		return rows.slice(0, height).map((line) => truncateToWidth(line, width, ""));
 	}
 }
