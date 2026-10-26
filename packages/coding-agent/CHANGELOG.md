@@ -24,6 +24,7 @@
 
 - Time labels in tool and thinking headers, appended message times, and user messages now end one column short of the right edge, so the fullscreen auto scrollbar no longer hides their last digit.
 - Settled tool rows keep their rendered lines when the transcript only re-evaluates their spacing; the spacing was applied on every frame and invalidated every row's cache, so long transcripts re-rendered continuously.
+- The transcript caches whether a child's rendered lines are blank per rendered array instead of scanning every line of every row on every frame; at 8000 rows a frame dropped from about 4ms to under 1ms.
 - Streaming thinking and answer text now redraw at most every 100ms instead of rebuilding the accumulated Markdown on every delta.
 - Settled tool rows, assistant messages, and user messages reuse their rendered lines across frame redraws instead of re-measuring the whole transcript every frame; spinners and streaming content still redraw.
 - Restored tool calls that never recorded a result no longer keep their spinner running; the 80ms timer re-rendered the whole transcript and pinned a CPU core in long sessions.

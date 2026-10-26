@@ -95,6 +95,19 @@ describe("tool transcript layout", () => {
 		expect(transcript.render(100)).toEqual(initial);
 		expect(second.render(100)).toHaveLength(1);
 	});
+	it("re-checks a child's visibility when its rendered lines change", () => {
+		const transcript = new ToolTranscriptContainer();
+		let lines = [""];
+		const child = { render: () => lines, invalidate: () => {} };
+		transcript.addChild(child);
+
+		expect(transcript.render(100).map(stripAnsi)).toEqual([""]);
+		expect(transcript.render(100).map(stripAnsi)).toEqual([""]);
+
+		// The scan is cached per rendered array, so a new array must be read again.
+		lines = ["visible content"];
+		expect(transcript.render(100).map(stripAnsi)).toEqual(["visible content"]);
+	});
 	it("joins tool-only turns and uses the same layout for rendering and mouse dispatch", () => {
 		const transcript = new ToolTranscriptContainer();
 		transcript.addChild(new Text("Checking free space.", 0, 0));
