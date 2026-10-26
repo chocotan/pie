@@ -3,6 +3,7 @@ import { getKeybindings, setKeybindings, type TUI, type TuiMouseEvent, visibleWi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { type SubagentDetailSnapshot, SubagentDetailView } from "../src/extensions/subagents/view.ts";
+import { formatMessageTime } from "../src/modes/interactive/components/message-time.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -173,12 +174,26 @@ describe("SubagentDetailView", () => {
 		expect(lines[row + 2]).toContain("/dev/local");
 		expect(lines[row + 3]).toContain("disk.txt");
 		expect(lines.join("\n").match(/24ms/g)).toHaveLength(1);
-		expect(view.handleMouse(mouse(3, row + 1))?.handled).not.toBe(true);
-		expect(stripAnsi(view.render(100).join("\n"))).toContain("Filesystem");
-		expect(view.handleMouse(mouse(3, row))?.handled).toBe(true);
+		expect(view.handleMouse(mouse(3, row + 1))?.handled).toBe(true);
 		expect(stripAnsi(view.render(100).join("\n"))).not.toContain("Filesystem");
+		expect(view.handleMouse(mouse(3, row))?.handled).toBe(true);
+		expect(stripAnsi(view.render(100).join("\n"))).toContain("Filesystem");
 		view.dispose();
 	});
+	it("shows the start time and elapsed time in the metadata row", () => {
+		const now = Date.now();
+		const startedAt = now - 65_000;
+		const view = new SubagentDetailView(
+			{ terminal: { rows: 30 }, requestRender: vi.fn() } as unknown as TUI,
+			() => ({ ...snapshot(), status: "completed", startedAt, finishedAt: now, messages: [] }),
+			vi.fn(),
+		);
+		const text = stripAnsi(view.render(120).join("\n"));
+		expect(text).toContain(`started ${formatMessageTime(startedAt)}`);
+		expect(text).toContain("1m 5s");
+		view.dispose();
+	});
+
 	it("renders user content-block arrays from real saved child sessions", () => {
 		const current: SubagentDetailSnapshot = {
 			...snapshot(),
@@ -250,7 +265,9 @@ describe("SubagentDetailView", () => {
 	it("auto-expands streaming thought, collapses at the answer, and obeys remapped shortcuts", () => {
 		setKeybindings(new KeybindingsManager({ "app.thinking.toggle": "ctrl+x", "tui.select.cancel": "ctrl+q" }));
 		const done = vi.fn();
-		const thought = fauxAssistantMessage([{ type: "thinking", thinking: "live reasoning" }], { timestamp: 7 });
+		const thought = fauxAssistantMessage([{ type: "thinking", thinking: "live reasoning\nlatest detail" }], {
+			timestamp: 7,
+		});
 		let current: SubagentDetailSnapshot = { ...snapshot(), messages: [], streaming: thought, status: "running" };
 		const view = new SubagentDetailView(
 			{ terminal: { rows: 30 }, requestRender: vi.fn() } as unknown as TUI,
@@ -264,6 +281,7 @@ describe("SubagentDetailView", () => {
 			messages: [fauxAssistantMessage([...thought.content, { type: "text", text: "answer" }], { timestamp: 7 })],
 		};
 		expect(stripAnsi(view.render(100).join("\n"))).not.toContain("live reasoning");
+		expect(stripAnsi(view.render(100).join("\n"))).toContain("latest detail");
 		view.handleInput("\x18");
 		expect(stripAnsi(view.render(100).join("\n"))).toContain("live reasoning");
 		view.handleInput("\x11");

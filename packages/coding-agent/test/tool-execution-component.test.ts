@@ -9,6 +9,7 @@ import { type BashOperations, createBashToolDefinition } from "../src/core/tools
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
+import { formatMessageTime } from "../src/modes/interactive/components/message-time.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -692,6 +693,30 @@ describe("ToolExecutionComponent parity", () => {
 		expect(expanded.match(/Check disk space/g)).toHaveLength(1);
 		component.dispose();
 	});
+	test("stops the spinner for a restored call that never produced a result", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"tool",
+			"orphan",
+			{},
+			{},
+			undefined,
+			{ requestRender } as unknown as TUI,
+			"/tmp",
+		);
+		// A live row starts the 80ms spinner that re-renders the whole transcript.
+		component.render(80);
+		expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+		component.markSettled();
+		expect(vi.getTimerCount()).toBe(0);
+		vi.advanceTimersByTime(1000);
+		expect(requestRender).not.toHaveBeenCalled();
+		expect(stripAnsi(component.render(80)[1])).toContain("●");
+		component.dispose();
+	});
+
 	test("animates queued and running dots and stops the timer on completion", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
@@ -716,6 +741,47 @@ describe("ToolExecutionComponent parity", () => {
 		expect(vi.getTimerCount()).toBe(0);
 		component.dispose();
 	});
+	test("shows the call time on the header", () => {
+		const timestamp = Date.now();
+		const component = new ToolExecutionComponent(
+			"tool",
+			"stamp",
+			{},
+			{ timestamp },
+			undefined,
+			createFakeTui(),
+			"/tmp",
+		);
+		component.updateResult({ content: [], isError: false, durationMs: 4200 });
+		const row = stripAnsi(component.render(80)[1]);
+		const time = formatMessageTime(timestamp);
+		expect(row).toContain(time);
+		// Right-aligned: the row ends with the time, not with title padding.
+		expect(row.trimEnd().endsWith(time)).toBe(true);
+		// A narrow header drops the time instead of overflowing the row.
+		for (const line of component.render(10)) expect(stripAnsi(line).length).toBeLessThanOrEqual(10);
+		component.dispose();
+	});
+
+	test("reuses a settled row across frames and rebuilds when the result changes", () => {
+		const component = new ToolExecutionComponent(
+			"read",
+			"cache",
+			{ path: "notes.txt" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "first" }], details: undefined, isError: false });
+		component.setExpanded(true);
+		const first = component.render(80);
+		expect(component.render(80)).toBe(first);
+
+		component.updateResult({ content: [{ type: "text", text: "second" }], details: undefined, isError: false });
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("second");
+	});
+
 	test("renders every tool call independently", () => {
 		const first = new ToolExecutionComponent("read", "one", { path: "a" }, {}, undefined, createFakeTui(), "/tmp");
 		const second = new ToolExecutionComponent(
@@ -769,14 +835,19 @@ describe("ToolExecutionComponent parity", () => {
 		expect(expandedText.match(/read notes.txt/g)?.length ?? 0).toBe(1);
 		expect(expandedText).toContain("hidden content");
 		const contentRow = expandedLines.findIndex((line) => stripAnsi(line).includes("hidden content"));
-		expect(component.handleMouse({ ...event, y: contentRow, height: expandedLines.length })?.handled).not.toBe(true);
-		expect(stripAnsi(component.render(width)[1])).toContain("● read notes.txt");
-		expect(stripAnsi(component.render(width)[1])).not.toMatch(/[▸▾]/);
-		expect(component.handleMouse({ ...event, y: 1, height: expandedLines.length })?.handled).toBe(true);
+		// A press on the body stays unhandled so a drag selects text instead of toggling.
+		expect(
+			component.handleMouse({ ...event, type: "press", y: contentRow, height: expandedLines.length })?.handled,
+		).not.toBe(true);
+		// A click anywhere in the expanded body collapses the row in one click.
+		expect(component.handleMouse({ ...event, y: contentRow, height: expandedLines.length })?.handled).toBe(true);
 		const collapsedLines = component.render(width);
 		expect(stripAnsi(collapsedLines[1])).toContain("● read notes.txt");
 		expect(stripAnsi(collapsedLines[1])).not.toMatch(/[▸▾]/);
 		expect(stripAnsi(collapsedLines.join("\n"))).not.toContain("hidden content");
+		// The header still toggles the same row back open.
+		expect(component.handleMouse({ ...event, y: 1, height: collapsedLines.length })?.handled).toBe(true);
+		expect(stripAnsi(component.render(width).join("\n"))).toContain("hidden content");
 	});
 
 	test("collapses ordinary read results until expanded", () => {

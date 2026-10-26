@@ -1,7 +1,8 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import { formatMessageTime } from "../src/modes/interactive/components/message-time.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -33,6 +34,28 @@ function createAssistantMessage(
 	};
 }
 
+function mouseEvent(
+	component: AssistantMessageComponent,
+	type: TuiMouseEvent["type"],
+	y: number,
+	width = 80,
+): TuiMouseEvent {
+	return {
+		type,
+		button: "left",
+		x: 1,
+		y,
+		screenX: 1,
+		screenY: y,
+		width,
+		height: component.render(width).length,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		clickCount: 1,
+	};
+}
+
 describe("AssistantMessageComponent", () => {
 	test("hides thinking by default in one line while preserving click-to-expand", () => {
 		initTheme("dark");
@@ -43,11 +66,37 @@ describe("AssistantMessageComponent", () => {
 		expect(lines.filter((line) => line.trim())).toHaveLength(1);
 		expect(lines.join("\n")).toContain("Thought");
 		expect(lines.join("\n")).not.toContain("private reasoning");
+		// The collapsed header previews the latest line of the hidden thought.
+		expect(lines.join("\n")).toContain("second line");
 	});
+	test("truncates a long collapsed preview and stays inside the width", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: `short\n${"x".repeat(200)}` }]),
+		);
+		const line = component.render(40).find((candidate) => stripAnsi(candidate).trim());
+		expect(line).toBeDefined();
+		expect(stripAnsi(line!)).toContain("…");
+		expect(stripAnsi(line!).length).toBeLessThanOrEqual(40);
+		// A narrow header drops the preview and time instead of overflowing.
+		for (const candidate of component.render(10)) expect(stripAnsi(candidate).length).toBeLessThanOrEqual(10);
+	});
+	test("reuses rendered lines across frames until the message changes", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(createAssistantMessage([{ type: "text", text: "first answer" }]));
+		const first = component.render(80);
+		expect(component.render(80)).toBe(first);
+
+		component.updateContent(createAssistantMessage([{ type: "text", text: "second answer" }]));
+		const updated = component.render(80);
+		expect(updated).not.toBe(first);
+		expect(stripAnsi(updated.join("\n"))).toContain("second answer");
+	});
+
 	test("keeps the Thought header through repeated mouse expansion and collapse", () => {
 		initTheme("dark");
 		const component = new AssistantMessageComponent(
-			createAssistantMessage([{ type: "thinking", thinking: "reasoning body" }]),
+			createAssistantMessage([{ type: "thinking", thinking: "reasoning body\nbody detail" }]),
 		);
 		for (const expanded of [true, false, true, false]) {
 			const lines = component.render(80);
@@ -72,11 +121,13 @@ describe("AssistantMessageComponent", () => {
 			const rendered = stripAnsi(component.render(80).join("\n"));
 			expect(rendered).toContain(`${expanded ? "▾" : "▸"} Thought`);
 			expect(rendered.includes("reasoning body")).toBe(expanded);
+			// The last line stays readable as the collapsed preview.
+			expect(rendered).toContain("body detail");
 		}
 	});
 	test.each(["tool", "answer", "end"])("auto-expands live thinking and collapses on %s", (phase) => {
 		initTheme("dark");
-		const thinking = { type: "thinking" as const, thinking: "live reasoning" };
+		const thinking = { type: "thinking" as const, thinking: "live reasoning\nlatest detail" };
 		const component = new AssistantMessageComponent();
 		component.updateContent(createAssistantMessage([thinking]), true);
 		let rendered = stripAnsi(component.render(80).join("\n"));
@@ -92,6 +143,8 @@ describe("AssistantMessageComponent", () => {
 		rendered = stripAnsi(component.render(80).join("\n"));
 		expect(rendered).toContain("▸ Thought");
 		expect(rendered).not.toContain("live reasoning");
+		// Collapsing keeps one preview line instead of dropping the thought entirely.
+		expect(rendered).toContain("latest detail");
 	});
 	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {
 		initTheme("dark");
@@ -155,7 +208,7 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 		const component = new AssistantMessageComponent(
 			createAssistantMessage([
-				{ type: "thinking", thinking: "first reasoning" },
+				{ type: "thinking", thinking: "first reasoning\nfirst detail" },
 				{ type: "text", text: "answer" },
 				{ type: "thinking", thinking: "second reasoning" },
 			]),
@@ -183,8 +236,64 @@ describe("AssistantMessageComponent", () => {
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
 		expect(collapsed).not.toContain("first reasoning");
+		expect(collapsed).toContain("first detail");
 		expect(collapsed).toContain("Thought");
 		expect(collapsed).toContain("second reasoning");
+	});
+
+	test("keeps the transcript thought collapsed while streaming and expands it on click", () => {
+		initTheme("dark");
+		// The transcript opts out of live expansion: ninth argument false, after messageId and the
+		// transformer timestamp that the restored path uses.
+		const component = new AssistantMessageComponent(
+			undefined,
+			true,
+			undefined,
+			"Thinking...",
+			1,
+			[],
+			undefined,
+			undefined,
+			false,
+		);
+		component.updateContent(
+			createAssistantMessage([{ type: "thinking", thinking: "live reasoning\nlatest detail" }]),
+			true,
+		);
+		let rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("▸ Thinking...");
+		expect(rendered).not.toContain("live reasoning");
+		expect(rendered).toContain("latest detail");
+
+		const row = component.render(80).findIndex((line) => stripAnsi(line).includes("Thinking..."));
+		expect(component.handleMouse(mouseEvent(component, "click", row))?.handled).toBe(true);
+		rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("▾ Thinking...");
+		expect(rendered).toContain("live reasoning");
+	});
+
+	test("leaves a drag to text selection instead of toggling the thought", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "reasoning body" }]),
+			false,
+		);
+		const row = component.render(80).findIndex((line) => stripAnsi(line).includes("reasoning body"));
+		expect(row).toBeGreaterThanOrEqual(0);
+		for (const type of ["press", "drag", "release"] as const) {
+			expect(component.handleMouse(mouseEvent(component, type, row + 1))?.handled).not.toBe(true);
+		}
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("reasoning body");
+	});
+
+	test("shows the message time on the thinking header", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([{ type: "thinking", thinking: "reasoning" }]);
+		const component = new AssistantMessageComponent(message);
+		const header = stripAnsi(component.render(80)[1] ?? "");
+		// The clock ends on the last column so thinking and tool rows line up.
+		expect(header.endsWith(formatMessageTime(message.timestamp))).toBe(true);
+		expect(visibleWidth(header)).toBe(80);
 	});
 
 	test("uses configured output padding for text and thinking", () => {

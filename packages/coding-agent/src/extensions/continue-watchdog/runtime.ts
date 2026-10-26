@@ -1747,11 +1747,17 @@ export function createDecisionRuntime(options: DecisionRuntimeOptions): Decision
 		const sourceLeaf = ctx.sessionManager.getLeafId();
 		const sourceModel = ctx.model === undefined ? undefined : `${ctx.model.provider}/${ctx.model.id}`;
 		const sourceThinking = options.pi.getThinkingLevel();
+		const sourceWatchdogModel = options.pi.getSettings().watchdogModel;
+		const decisionModel =
+			typeof sourceWatchdogModel === "string" && sourceWatchdogModel.trim()
+				? sourceWatchdogModel.trim()
+				: config.model;
 		const sourceCurrent = (): boolean => {
 			if (sessionContext?.sessionManager.getSessionId() !== sourceSession || sourceLeaf === null) return false;
 			if (
 				(ctx.model === undefined ? undefined : `${ctx.model.provider}/${ctx.model.id}`) !== sourceModel ||
-				options.pi.getThinkingLevel() !== sourceThinking
+				options.pi.getThinkingLevel() !== sourceThinking ||
+				options.pi.getSettings().watchdogModel !== sourceWatchdogModel
 			)
 				return false;
 			const branch = ctx.sessionManager.getBranch();
@@ -1826,7 +1832,7 @@ export function createDecisionRuntime(options: DecisionRuntimeOptions): Decision
 					parent: ctx.sessionManager,
 					parentProviderRegistry: ctx.modelRegistry,
 					cwd: ctx.cwd,
-					model: `${ctx.model.provider}/${ctx.model.id}:${options.pi.getThinkingLevel()}`,
+					model: decisionModel ?? `${ctx.model.provider}/${ctx.model.id}:${sourceThinking}`,
 					signal: operation.abort.signal,
 					projectContext: (messages) => foldDecisionContext(messages),
 				},

@@ -31,8 +31,9 @@ so the task in progress finishes. An inquiry that is still open is cancelled.
    ten-second fence after the last activity must expire before anything is
    asked.
 2. **Ask privately.** The model gets the full active conversation in a forked
-   child session with the same provider, model, and thinking level. Its only
-   allowed effect is one guarded `write` of a `decision.json` file in a private
+   child session using the configured `model`, or the main session's provider,
+   model, and thinking level when unset. Its only allowed effect is one guarded
+   `write` of a `decision.json` file in a private
    `/var/tmp` directory; the file is the only accepted result. Prose, shell
    commands, and other files are rejected, and an invalid result gets at most
    two corrections in the same child.
@@ -63,13 +64,29 @@ releases the original candidate unreviewed.
 
 ## Configuration
 
-Later layers win field by field: built-ins, then
+Choose **Watchdog model** in `/settings` to select a model from the searchable
+list. Pie saves this as `watchdogModel` in `~/.pie/settings.json` and uses it
+for the next private decision without reloading extensions. Select **Default**
+to clear this override and use the watchdog config's `model`, or the main
+session's model when that is unset. Trusted project settings can override the
+global `watchdogModel`, as with other settings.
+
+You can also set an explicit thinking level in `settings.json`:
+
+```json
+{
+  "watchdogModel": "openai/gpt-6.1-sol:low"
+}
+```
+
+For the remaining watchdog options, later layers win field by field: built-ins, then
 `$PIE_CODING_AGENT_DIR/pi-continue-watchdog.json` (normally
-`~/.pie/agent/pi-continue-watchdog.json`), then trusted project
+`~/.pie/pi-continue-watchdog.json`), then trusted project
 `.pie/pi-continue-watchdog.json`. Invalid values keep the lower-precedence value.
 
 ```json
 {
+  "model": "openai/gpt-6.1-sol:low",
   "maxContinue": 10,
   "reasonTypes": ["JOB_DONE", "WAIT_USER", "JOB_BLOCKED", "WAIT_CALLBACK"],
   "continueReasonTypes": ["WORK_REMAINS", "VERIFYING"],
@@ -77,6 +94,15 @@ Later layers win field by field: built-ins, then
   "unlockReviewEnabled": true
 }
 ```
+
+`model` selects the private decision model when `watchdogModel` is unset in
+settings. Both accept `provider/modelId`, optionally with a `:thinking` suffix
+(for example `:low` or `:off`). Without a suffix, the fork restores the main
+session's recorded thinking level, clamped to the selected model's supported
+levels. Omit both to inherit the main session's model and thinking level.
+This applies to the initial decision, corrections, and reconsideration;
+ordinary continuations still use the main session's model. Reload extensions
+after changing `pi-continue-watchdog.json`.
 
 `decisionPrompt` and `continuePrompt` override the built-in wording (each at
 most 16,384 code points).

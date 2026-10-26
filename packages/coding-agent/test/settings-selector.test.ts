@@ -63,6 +63,58 @@ describe("SettingsSelectorComponent", () => {
 		expect(onWheelScrollLinesChange.mock.calls.flat()).toEqual([10, "auto", 1]);
 	});
 
+	it("selects and clears the watchdog model without changing the main model", async () => {
+		harness = await createHarness({ models: [{ id: "main" }, { id: "watchdog" }] });
+		const main = harness.session.model;
+		const onWatchdogModelChange = vi.fn((model: string | undefined) => {
+			harness!.settingsManager.setWatchdogModel(model);
+		});
+		const config = {
+			defaultModel: "not set",
+			availableDefaultModels: harness.models,
+			modelThinkingLevels: {},
+		} as unknown as SettingsConfig;
+		const callbacks = { onWatchdogModelChange } as unknown as SettingsCallbacks;
+		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
+		for (const key of "Watchdog model") list.handleInput(key);
+		list.handleInput("\r");
+		for (const key of "watchdog") list.handleInput(key);
+		list.handleInput("\x1b");
+		expect(onWatchdogModelChange).not.toHaveBeenCalled();
+
+		list.handleInput("\r");
+		for (const key of "watchdog") list.handleInput(key);
+		list.handleInput("\r");
+		expect(onWatchdogModelChange).toHaveBeenLastCalledWith("faux/watchdog");
+		expect(harness.settingsManager.getWatchdogModel()).toBe("faux/watchdog");
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("faux/watchdog");
+
+		list.handleInput("\r");
+		for (const key of "Default") list.handleInput(key);
+		list.handleInput("\r");
+		expect(onWatchdogModelChange).toHaveBeenLastCalledWith(undefined);
+		expect(harness.settingsManager.getWatchdogModel()).toBeUndefined();
+		expect(harness.session.model).toBe(main);
+	});
+
+	it("keeps a configured watchdog model with a thinking suffix selectable when unavailable", () => {
+		const onWatchdogModelChange = vi.fn();
+		const config = {
+			defaultModel: "not set",
+			watchdogModel: "other/decision:low",
+			availableDefaultModels: [],
+			modelThinkingLevels: {},
+		} as unknown as SettingsConfig;
+		const list = new SettingsSelectorComponent(config, {
+			onWatchdogModelChange,
+		} as unknown as SettingsCallbacks).getSettingsList();
+		list.selectItem("watchdog-model");
+		list.handleInput("\r");
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("other/decision:low");
+		list.handleInput("\r");
+		expect(onWatchdogModelChange).toHaveBeenCalledWith("other/decision:low");
+	});
+
 	it("cycles through share destinations", () => {
 		const onSessionShareDestinationChange = vi.fn();
 		const config = {

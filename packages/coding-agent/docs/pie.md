@@ -137,6 +137,12 @@ Wide TUI questionnaires place options and previews side by side; narrow views st
 
 The schema, validation, normalization, response format, and RPC behavior are adapted from [rpiv-ask-user-question](https://github.com/juicesharp/rpiv-mono/tree/2d88b79c08ce19ffeecbe85d5ee1071046b708c0/packages/rpiv-ask-user-question). The view is adapted to this fork's native components and keybindings. The [MIT notice](third-party/rpiv-ask-user-question-LICENSE) is included. No rpiv-config or internationalization dependency is required.
 
+## Ponytail
+
+The replaceable `ponytail` plugin injects a "lazy senior dev" instruction overlay: it asks for the smallest change that fully solves the task and a short, plain answer. `/ponytail` reports or changes the mode (`off`, `lite`, `full`, `ultra`; default `full`), and `/ponytail-review`, `/ponytail-audit`, `/ponytail-gain`, `/ponytail-debt`, and `/ponytail-help` run the bundled skills. The active mode is stored in the session, the status line shows it unless `hideStatus` is set, and the default mode and startup behavior come from `~/.pie/ponytail/config.json` or the `PONYTAIL_DEFAULT_MODE`, `PONYTAIL_QUIET_STARTUP`, and `PONYTAIL_HIDE_STATUS` environment variables.
+
+It is adapted from [@dietrichgebert/ponytail](https://github.com/DietrichGebert/ponytail) 5.1.0, with its [MIT attribution and port notes](third-party/ponytail/NOTICE.md) preserved, including the unverified benchmark figures in the gain skill. Disable it with `-builtin:ponytail` or replace it with another plugin registering `/ponytail`.
+
 ## Retry
 
 The replaceable `retry` plugin owns automatic retry while it is loaded. It retries every failed assistant turn except context overflow, which compaction handles. A response cut off at the output token limit is continued, and a turn that ends with no usable output is nudged once.
@@ -217,9 +223,10 @@ The implementation is adapted from [pi-usage](https://github.com/chocotan/pi-usa
 - Todo, Subagents and background jobs are non-capturing floating panels at the top right, in that order. They hide when empty. Closing a panel removes its space.
 - Rounded input borders show current run status/time on the left.
 - Token and context statistics use the original Pi footer, including input/output, cache reads/writes, cache hit rate, cost, and right-aligned model/thinking. Directories outside Git repositories have no branch placeholder.
-- Active Thinking content expands while it streams and collapses when the next phase starts. Explicit manual and global visibility choices are respected. Thinking and tool headers remain visible in both states; click again to collapse.
+- Thinking stays collapsed while it streams and after it ends, showing a one-line preview of its latest content on the header. Clicking the header or the expanded body toggles it; the subagent detail view still expands live thinking. Explicit manual and global visibility choices are respected.
+- Every user message, assistant message, thinking header, and tool header shows when it happened: `HH:MM` for today, `Nh ago` or `Nd ago` for earlier days, right-aligned on the row. Compaction summaries report how long they took; subagent panel rows and the detail header show when each subagent started and how long it has run.
 - Built-in coding tools accept an optional `description` containing the purpose of that invocation. Tool titles show this purpose instead of raw command/parameter text; expanded views retain the complete original command and arguments. Calls without a description keep their existing command/path summary.
-- Tool titles begin with the status dot and purpose, without an expansion arrow. Click the title or use the tool expansion shortcut to show or hide details; hover remains the clickable affordance.
+- Tool titles begin with the status dot and purpose, without an expansion arrow. Click the title to expand, then one click anywhere in the expanded body collapses it; a drag there still selects text, and the tool expansion shortcut follows the whole transcript. Hover remains the clickable affordance.
 - Tool and subagent states use a shared animated dot spinner while queued or running, a green `●` on success, a red `●` on failure, and a muted `●` for stopped or interrupted subagents. Durations appear once in the title, use milliseconds below one second, and hide zero. Expanded output follows its title directly. Consecutive visible tool calls have no blank rows between them; the first tool after text keeps one leading blank row. This layout applies to both the parent transcript and subagent details. A single tool expansion shortcut follows the transcript.
 - In fullscreen mode, clickable tool/thinking titles, Todo/Subagent entries, overflow links, and close buttons highlight on hover without changing keyboard focus. A system theme with transparent selection backgrounds uses an underline instead. Moving away, scrolling, starting a selection, resizing, or switching overlays clears the highlight.
 - User messages keep the theme's default user background.

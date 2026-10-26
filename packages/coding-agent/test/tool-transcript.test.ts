@@ -96,7 +96,11 @@ describe("tool transcript layout", () => {
 		expect(lines[3]).not.toMatch(/[▸▾]/);
 		const output = lines.findIndex((line) => line.includes("Child result"));
 		expect(output).toBeGreaterThan(3);
-		expect(transcript.handleMouse(mouse(output, lines.length))?.handled).not.toBe(true);
+		// One click anywhere in the expanded body collapses the tool.
+		expect(transcript.handleMouse(mouse(output, lines.length))?.handled).toBe(true);
+		expect(transcript.render(100).map(stripAnsi).join("\n")).not.toContain("Child result");
+		// The title expands it again, then collapses it.
+		expect(transcript.handleMouse(mouse(3, lines.length))?.handled).toBe(true);
 		expect(transcript.render(100).map(stripAnsi).join("\n")).toContain("Child result");
 		expect(transcript.handleMouse(mouse(3, lines.length))?.handled).toBe(true);
 		lines = transcript.render(100).map(stripAnsi);

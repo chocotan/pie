@@ -515,7 +515,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						save(record);
 						reportTask(record, record.status === "completed" ? "completed" : "pending");
 						refresh();
-						if (!closing && (args.run_in_background ?? true))
+						if (!closing && (args.run_in_background ?? true)) {
 							pi.sendMessage(
 								{
 									customType: "pie.subagent-completion",
@@ -525,6 +525,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 								},
 								{ triggerTurn: true, deliverAs: "followUp" },
 							);
+						}
 					}
 				},
 			};

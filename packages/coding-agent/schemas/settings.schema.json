@@ -17,6 +17,11 @@
     "defaultModel": {
       "type": "string"
     },
+    "watchdogModel": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Private watchdog decision model as provider/modelId, optionally with a :thinking suffix. Overrides pi-continue-watchdog.json; unset uses its model or the main session."
+    },
     "defaultThinkingLevel": {
       "$ref": "#/$defs/ModelThinkingLevel"
     },

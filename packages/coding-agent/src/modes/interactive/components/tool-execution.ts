@@ -30,13 +30,20 @@ import { theme } from "../theme/theme.ts";
 import { ActivityDot } from "./activity-dot.ts";
 import { highlightHover } from "./hover-style.ts";
 import { keyHint } from "./keybinding-hints.ts";
+import { formatMessageTime } from "./message-time.ts";
+import { RenderCache } from "./render-cache.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
+
+/** Title columns kept before the header time is dropped on narrow rows. */
+const MIN_TITLE_WIDTH_WITH_TIME = 12;
 
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
 	outputPad?: number;
+	/** Wall-clock time of the call, shown on the header so long runs stay dated. */
+	timestamp?: number;
 }
 
 /** Keep rendered body rows and mouse coordinates in sync when omitting a duplicate call title. */
@@ -84,6 +91,7 @@ export class ToolExecutionComponent extends Container {
 	private showImages: boolean;
 	private imageWidthCells: number;
 	private outputPad: number;
+	private readonly timestamp?: number;
 	private isPartial = true;
 	private toolDefinition?: ToolRenderers;
 	private ui: TUI;
@@ -99,6 +107,7 @@ export class ToolExecutionComponent extends Container {
 		durationMs?: number;
 	};
 	private hideComponent = false;
+	private readonly renderCache = new RenderCache();
 
 	constructor(
 		toolName: string,
@@ -117,6 +126,7 @@ export class ToolExecutionComponent extends Container {
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
 		this.outputPad = options.outputPad ?? 1;
+		this.timestamp = options.timestamp;
 		this.ui = ui;
 		this.cwd = cwd;
 
@@ -200,8 +210,10 @@ export class ToolExecutionComponent extends Container {
 
 	private createResultRegion(component: Component): MouseRegion {
 		return new MouseRegion(component, (event) => {
-			if (!this.result || this.expanded || event.type !== "click" || event.button !== "left") return undefined;
-			this.setExpanded(true);
+			// Only a click toggles: a press is left unhandled so dragging selects text,
+			// and the host emits a click only when the pointer did not move.
+			if (event.type !== "click" || event.button !== "left") return undefined;
+			this.setExpanded(!this.expanded);
 			return { handled: true };
 		});
 	}
@@ -256,8 +268,21 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
+	/**
+	 * A restored or abandoned call that never produced a result stays a static row.
+	 * Keeping it partial starts an 80ms spinner timer that re-renders every row.
+	 */
+	markSettled(): void {
+		if (!this.isPartial) return;
+		this.isPartial = false;
+		this.spinner?.dispose();
+		this.spinner = undefined;
+		this.updateDisplay();
+	}
+
 	setLeadingGap(enabled: boolean): void {
 		this.leadingSpacer.setLines(enabled ? 1 : 0);
+		this.renderCache.invalidate();
 	}
 
 	setOutputPad(outputPad: number): void {
@@ -289,18 +314,31 @@ export class ToolExecutionComponent extends Container {
 	private renderHeader(width: number): string {
 		const pad = Math.min(this.outputPad, Math.max(0, Math.floor((width - 1) / 2)));
 		const available = Math.max(1, width - 2 * pad);
-		let status = theme.fg(this.result?.isError ? "error" : "success", "●");
+		let status = theme.fg(this.result?.isError ? "error" : this.result ? "success" : "muted", "●");
 		if (this.isPartial && !this.result?.isError) {
 			this.spinner ??= new ActivityDot(this.ui);
 			status = this.spinner.renderDot();
 		}
 		const timing = toolTimerText(this.getRenderContext(undefined), this.isPartial);
 		const suffix = timing ? ` · ${timing}` : "";
+		const clockText = this.timestamp === undefined ? "" : formatMessageTime(this.timestamp);
+		const clock =
+			clockText !== "" && available - visibleWidth(clockText) - 2 >= MIN_TITLE_WIDTH_WITH_TIME
+				? `  ${theme.fg("muted", clockText)}`
+				: "";
 		const recordedError: unknown = this.result?.details?.error;
-		const errorText =
-			typeof recordedError === "string" ? recordedError.split("\n")[0] : this.getTextOutput().split("\n")[0];
-		const error = this.result?.isError ? ` · ${theme.fg("toolOutput", errorText)}` : "";
-		const budget = Math.max(1, available - visibleWidth(status) - 1 - visibleWidth(suffix) - visibleWidth(error));
+		// Only failed tools need their output text; building it on every render of a
+		// successful tool copies the full output per frame.
+		const error = this.result?.isError
+			? ` · ${theme.fg(
+					"toolOutput",
+					typeof recordedError === "string" ? recordedError.split("\n")[0] : this.getTextOutput().split("\n")[0],
+				)}`
+			: "";
+		const budget = Math.max(
+			1,
+			available - visibleWidth(status) - 1 - visibleWidth(suffix) - visibleWidth(error) - visibleWidth(clock),
+		);
 		const renderedCall =
 			(this.callRendererComponent ?? this.createCallFallback())
 				.render(available)
@@ -312,14 +350,26 @@ export class ToolExecutionComponent extends Container {
 			? `${theme.fg("toolTitle", theme.bold(this.toolName))} ${theme.fg("accent", description)}`
 			: sliceByColumn(renderedCall, leading, visibleWidth(plainCall.trim()));
 		const call = truncateToWidth(title, budget, "…");
-		const text = truncateToWidth(`${status} ${call}${error}${suffix}`, available, "…");
-		const line = " ".repeat(pad) + text + " ".repeat(Math.max(0, width - pad - visibleWidth(text)));
+		const text = truncateToWidth(
+			`${status} ${call}${error}${suffix}`,
+			Math.max(1, available - visibleWidth(clock)),
+			"…",
+		);
+		// The time sits at the right edge, like the thinking header, so a long title never hides it.
+		const gap = Math.max(0, width - pad - visibleWidth(text) - visibleWidth(clock));
+		const line = " ".repeat(pad) + text + " ".repeat(gap) + clock;
 		const color = this.result?.isError ? "toolErrorBg" : this.isPartial ? "toolPendingBg" : "toolSuccessBg";
 		return this.headerHovered ? highlightHover(line) : theme.bg(color, line);
 	}
 
 	override render(width: number): string[] {
 		if (this.argsPending) this.updateDisplay();
+		// A running row animates (spinner, live timer), so only settled rows are cached.
+		if (this.isPartial) return this.buildLines(width);
+		return this.renderCache.render(`${width}|${this.headerHovered ? 1 : 0}`, () => this.buildLines(width));
+	}
+
+	private buildLines(width: number): string[] {
 		if (this.hideComponent) return [];
 		if (
 			this.getRenderShell() === "self" &&
@@ -361,6 +411,7 @@ export class ToolExecutionComponent extends Container {
 
 	private updateDisplay(): void {
 		this.argsPending = false;
+		this.renderCache.invalidate();
 		const bgFn = this.isPartial
 			? (text: string) => theme.bg("toolPendingBg", text)
 			: this.result?.isError

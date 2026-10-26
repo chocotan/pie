@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { formatMessageTime } from "../src/modes/interactive/components/message-time.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -30,6 +31,22 @@ describe("UserMessageComponent", () => {
 		expect(lines[1]).toContain("hello");
 		expect(lines[2].startsWith(OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
 		expect(lines[2].endsWith(BG_RESET)).toBe(true);
+	});
+
+	test("right-aligns the time inside the message background", () => {
+		initTheme("dark");
+		const timestamp = Date.now();
+		// The clock time is the seventh argument; messageId and the transformer timestamp stay unset.
+		const component = new UserMessageComponent("hello", undefined, 1, [], undefined, undefined, timestamp);
+		const lines = component.render(40);
+
+		// The time replaces the Markdown's bottom padding row, so height is unchanged.
+		expect(lines).toHaveLength(3);
+		const timeRow = stripAnsi(lines[2]);
+		expect(timeRow).toContain(formatMessageTime(timestamp));
+		expect(timeRow.trimEnd().endsWith(formatMessageTime(timestamp))).toBe(true);
+		expect(lines[2]).toContain(theme.getBgAnsi("userMessageBg"));
+		expect(stripAnsi(lines[1])).toContain("hello");
 	});
 
 	test("chains Markdown transformers with user message context", () => {

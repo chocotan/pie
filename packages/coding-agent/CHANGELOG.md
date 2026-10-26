@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added **Watchdog model** to `/settings`, persisted as `watchdogModel` in `settings.json` and applied to the next private decision. It overrides the optional `model` in `pi-continue-watchdog.json`; both accept a thinking-level suffix and default to the main session model when unset.
 - Subagent panel rows and completion notifications show current/max turns before elapsed time.
 - Added a floating task-details view when opening a Todo item in the TUI.
 - Added the continue watchdog as a built-in extension: after a run settles and stays idle for ten seconds it asks the model in a private forked session whether to continue or stop, then continues in the main session within a shared budget. It is off by default and enabled per session with `/lock-continue-watchdog`; `/unlock-continue-watchdog` never aborts a running continuation. See [Continue watchdog](docs/continue-watchdog.md)
@@ -11,6 +12,9 @@
 
 ### Changed
 
+- Compaction summaries now include how long they took.
+- Tool and thinking headers, user messages, and subagent rows show their time on the right edge (`HH:MM` today, `Nh ago`/`Nd ago` earlier); subagent panel rows and details pair the start time with the elapsed time.
+- Changed thinking and tool rows: a thought stays collapsed with a one-line preview of its latest content while it streams, one click anywhere in an expanded tool or thought collapses it while a drag still selects text, and user messages, assistant messages, thinking headers, and tool headers show when they happened (`HH:MM` for today, `Nh ago` or `Nd ago` for earlier days).
 - Todo and Subagents floating panels now show at most five items, with a view-all entrance for the remaining records.
 - Background task and subagent completion notifications now show compact, expandable status summaries instead of transport type names and raw JSON.
 - `pi update` for installs from the pi.dev installer no longer passes `--min-release-age=0` to `npm ci`. The release lockfile pins every package, so the flag had no effect, and security scanners that block it stopped the update ([#11262](https://github.com/earendil-works/pi/issues/11262))
@@ -18,6 +22,9 @@
 
 ### Fixed
 
+- Settled tool rows, assistant messages, and user messages reuse their rendered lines across frame redraws instead of re-measuring the whole transcript every frame; spinners and streaming content still redraw.
+- Restored tool calls that never recorded a result no longer keep their spinner running; the 80ms timer re-rendered the whole transcript and pinned a CPU core in long sessions.
+- Thinking headers now end their time on the same right column as tool headers.
 - Fixed subagent turn-limit stops and their cancellation diagnostics being displayed as red execution errors, while preserving the existing abort and completion notification flow.
 - Fixed `pi install` and `pi remove` adding ever deeper nested entries to the npm `package-lock.json` when the agent directory is reached through a symlink, such as `~/.pi` linked into a dotfiles repo. pi now passes the resolved real path to npm ([#11358](https://github.com/earendil-works/pi/issues/11358))
 - MCP sign-in now rejects authorization endpoints and other OAuth metadata URLs that are not `http:` or `https:`. Before, a malicious MCP server could supply a `file:` or custom protocol URL, which pi passed to the platform URL handler.

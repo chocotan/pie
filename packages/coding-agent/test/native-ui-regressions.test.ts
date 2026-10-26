@@ -13,7 +13,7 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 
 const thinkingMessage: AssistantMessage = {
 	role: "assistant",
-	content: [{ type: "thinking", thinking: "hidden content" }],
+	content: [{ type: "thinking", thinking: "hidden content\nlatest thought" }],
 	api: "openai-responses",
 	provider: "test",
 	model: "test",
@@ -84,6 +84,8 @@ describe("native UI regressions", () => {
 					expect(screen).not.toMatch(/[▸▾]/);
 				}
 				expect(screen.includes("hidden content")).toBe(expanded);
+				// The collapsed thought keeps a one-line preview of its latest content.
+				if (kind === "thought") expect(screen).toContain("latest thought");
 			}
 		} finally {
 			ui.stop();

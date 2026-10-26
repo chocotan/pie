@@ -118,6 +118,7 @@ describe("generated configuration schemas", () => {
 			valid: {
 				theme: "dark",
 				cacheWarming: "idle",
+				watchdogModel: "provider/decision:low",
 				extensionSetting: { enabled: true },
 				queueMode: "all",
 				websockets: true,
@@ -209,6 +210,9 @@ describe("generated configuration schemas", () => {
 			{ httpIdleTimeoutMs: "bogus" },
 			{ websocketConnectTimeoutMs: "30000" },
 			{ codemode: { inlineBudget: -1 } },
+			{ watchdogModel: "" },
+			{ watchdogModel: "  " },
+			{ watchdogModel: false },
 		]) {
 			expect(validator.Check(invalid)).toBe(false);
 		}

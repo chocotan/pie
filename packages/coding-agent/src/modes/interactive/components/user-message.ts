@@ -1,8 +1,9 @@
-import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, visibleWidth } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
-import { appendMessageTime } from "./message-time.ts";
+import { formatMessageTime } from "./message-time.ts";
+import { RenderCache } from "./render-cache.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -21,6 +22,7 @@ export class UserMessageComponent extends Container {
 	private timestamp?: string;
 	/** Clock time shown at the end of the message; live messages have no persisted entry timestamp. */
 	private messageTime?: number;
+	private readonly renderCache = new RenderCache();
 
 	constructor(
 		text: string,
@@ -47,7 +49,13 @@ export class UserMessageComponent extends Container {
 		this.rebuild();
 	}
 
+	override invalidate(): void {
+		this.renderCache.invalidate();
+		super.invalidate();
+	}
+
 	private rebuild(): void {
+		this.renderCache.invalidate();
 		this.clear();
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
 		// line, with identical output.
@@ -77,13 +85,26 @@ export class UserMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		// The clock label is fixed per message, so a settled row survives frame redraws.
+		return this.renderCache.render(String(width), () => this.buildLines(width));
+	}
+
+	private buildLines(width: number): string[] {
 		const lines = super.render(width);
 		if (lines.length === 0) {
 			return lines;
 		}
 
+		// Markdown pads one blank row under the text; the time goes there so it stays
+		// inside the message background instead of being appended past its reset.
+		if (this.messageTime !== undefined) {
+			const label = theme.fg("muted", formatMessageTime(this.messageTime));
+			const gap = width - visibleWidth(label);
+			if (gap >= 2) lines[lines.length - 1] = theme.bg("userMessageBg", " ".repeat(gap) + label);
+		}
+
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
-		return appendMessageTime(lines, width, this.messageTime);
+		return lines;
 	}
 }

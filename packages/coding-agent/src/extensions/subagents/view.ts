@@ -15,6 +15,7 @@ import { createAllToolRenderers } from "../../core/tools/renderers/index.ts";
 import { AssistantMessageComponent } from "../../modes/interactive/components/assistant-message.ts";
 import { highlightHover } from "../../modes/interactive/components/hover-style.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
+import { formatMessageTime } from "../../modes/interactive/components/message-time.ts";
 import { ToolExecutionComponent } from "../../modes/interactive/components/tool-execution.ts";
 import { ToolTranscriptContainer } from "../../modes/interactive/components/tool-transcript.ts";
 import { UserMessageComponent } from "../../modes/interactive/components/user-message.ts";
@@ -142,7 +143,7 @@ export class SubagentDetailView implements Component {
 		const elapsed = formatToolDuration(Math.max(0, (snapshot.finishedAt ?? Date.now()) - snapshot.startedAt));
 		const metadata = theme.fg(
 			snapshot.status === "error" ? "error" : snapshot.status === "completed" ? "success" : "muted",
-			`${snapshot.agent} · ${snapshot.model} · ${snapshot.status} · ${elapsed} · ${snapshot.thinking}`,
+			`${snapshot.agent} · ${snapshot.model} · ${snapshot.status} · started ${formatMessageTime(snapshot.startedAt)} · ${elapsed} · ${snapshot.thinking}`,
 		);
 		const lines = [
 			theme.fg("border", `╭${"─".repeat(Math.max(0, width - 2))}╮`),
@@ -240,7 +241,7 @@ export class SubagentDetailView implements Component {
 								part.name,
 								part.id,
 								part.arguments,
-								{ showImages: false },
+								{ showImages: false, timestamp: message.timestamp },
 								toolRenderers[part.name as keyof typeof toolRenderers],
 								this.ui,
 								process.cwd(),
@@ -251,6 +252,7 @@ export class SubagentDetailView implements Component {
 					tool.setArgsComplete();
 					if (result) tool.updateResult(result);
 					else if (running) tool.markExecutionStarted();
+					else tool.markSettled();
 				}
 				next.set(toolKey, { signature: toolSignature, component: tool });
 				this.transcript.addChild(tool);

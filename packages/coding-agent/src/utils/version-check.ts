@@ -2,7 +2,8 @@ import { compare, valid } from "semver";
 import { APP_NAME } from "../config.ts";
 import { fetchWithRetry } from "./management-http.ts";
 
-const LATEST_VERSION_URL = "https://raw.githubusercontent.com/chocotan/pie/main/packages/coding-agent/package.json";
+export const LATEST_VERSION_URL =
+	"https://raw.githubusercontent.com/chocotan/pie/main/packages/coding-agent/package.json";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
@@ -82,8 +83,14 @@ export async function getLatestPiRelease(
 		!config.version.trim()
 	)
 		return undefined;
+	const packageName =
+		"name" in data && typeof data.name === "string" && data.name.trim() ? data.name.trim() : undefined;
 	const note = "note" in config && typeof config.note === "string" ? config.note.trim() : undefined;
-	return { version: config.version.trim(), ...(note ? { note } : {}) };
+	return {
+		version: config.version.trim(),
+		...(packageName ? { packageName } : {}),
+		...(note ? { note } : {}),
+	};
 }
 
 export async function getLatestPiVersion(

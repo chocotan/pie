@@ -6,10 +6,21 @@ import { isPieUpdateCommand, runPieUpdate } from "../src/cli/pie-update.ts";
 
 describe("Pie source updater", () => {
 	it("routes app updates separately from extension package updates", () => {
-		for (const args of [["update"], ["update", "--self"], ["update", "--help"], ["update", "--force"]])
+		for (const args of [["update"], ["update", "--self"], ["update", "--help"]])
 			expect(isPieUpdateCommand(args)).toBe(true);
-		expect(isPieUpdateCommand(["update", "npm:an-extension"])).toBe(false);
-		expect(isPieUpdateCommand(["install", "npm:an-extension"])).toBe(false);
+		// Package-manager targets and flags must reach the package manager: the
+		// installer only rebuilds the app and rejects them.
+		for (const args of [
+			["update", "--extensions"],
+			["update", "--models"],
+			["update", "--all"],
+			["update", "--extension", "npm:an-extension"],
+			["update", "--force"],
+			["update", "--approve"],
+			["update", "npm:an-extension"],
+			["install", "npm:an-extension"],
+		])
+			expect(isPieUpdateCommand(args)).toBe(false);
 	});
 	it("runs the managed installer directly with the Pie root and propagates its result", () => {
 		const root = mkdtempSync(join(tmpdir(), "pie-update-"));
