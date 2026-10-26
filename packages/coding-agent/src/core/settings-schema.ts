@@ -247,6 +247,12 @@ export const SettingsSchema = Type.Object(
 		),
 		theme: Type.Optional(Type.String()),
 		compaction: Type.Optional(CompactionSettingsSchema),
+		compactModel: Type.Optional(
+			Type.Union([Type.String({ pattern: "^[^/\\s]+/\\S+$" }), Type.Null()], {
+				description:
+					'Summary model used by builtin:compact-model as "provider/modelId"; null uses the session model.',
+			}),
+		),
 		branchSummary: Type.Optional(BranchSummarySettingsSchema),
 		retry: Type.Optional(RetrySettingsSchema),
 		hideThinkingBlock: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.hideThinkingBlock })),

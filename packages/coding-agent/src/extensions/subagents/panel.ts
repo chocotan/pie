@@ -45,7 +45,7 @@ export class SubagentPanel implements Component {
 		this.rows = [];
 		if (!this.records.length || width < 1) return [];
 		const sorted = sortSubagents(this.records);
-		const count = Math.min(10, sorted.length, Math.max(1, Math.floor(this.ui.terminal.rows * 0.35) - 2));
+		const count = Math.min(5, sorted.length, Math.max(1, Math.floor(this.ui.terminal.rows * 0.35) - 2));
 		const records = sorted.slice(0, count);
 		const hidden = sorted.length - count;
 		if (!records.some((record) => ["running", "queued"].includes(record.status))) this.dispose();
@@ -72,7 +72,9 @@ export class SubagentPanel implements Component {
 			const end =
 				record.finishedAt ??
 				(record.status === "running" || record.status === "queued" ? Date.now() : record.startedAt);
-			const duration = ` ${Math.max(0, Math.floor((end - record.startedAt) / 1000))}s`;
+			const progress =
+				record.turns !== undefined && record.maxTurns !== undefined ? ` ${record.turns}/${record.maxTurns}` : "";
+			const duration = `${progress} ${Math.max(0, Math.floor((end - record.startedAt) / 1000))}s`;
 			const description = truncateToWidth(
 				record.description || record.agent,
 				Math.max(0, inner - duration.length - 2),

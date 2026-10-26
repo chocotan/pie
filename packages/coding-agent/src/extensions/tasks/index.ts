@@ -3,7 +3,7 @@ import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 import type { ReadonlySessionManager } from "../../core/session-manager.ts";
-import { TodoPanel } from "./view.ts";
+import { TaskDetailView, TodoPanel } from "./view.ts";
 
 export const TASK_STATE_ENTRY = "pie.tasks";
 export const TASK_RUN_EVENT = "pie.task-run";
@@ -124,8 +124,16 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 		hidePanel();
 		dismissed = false;
 	};
-	const showTask = (task: TaskRecord) =>
+	const showTask = async (task: TaskRecord, ctx: ExtensionContext) => {
+		if (ctx.hasUI && ctx.mode === "tui") {
+			await ctx.ui.custom<void>((tui, _theme, _keys, done) => new TaskDetailView(tui, task, done), {
+				overlay: true,
+				overlayOptions: { width: "72%", maxHeight: "80%" },
+			});
+			return;
+		}
 		pi.sendMessage({ customType: "pie.task-detail", content: JSON.stringify(task, null, 2), display: true });
+	};
 	const show = (ctx: ExtensionContext) => {
 		context = ctx;
 		state = readTaskState(ctx.sessionManager);
@@ -144,15 +152,16 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 						dismissed = true;
 						hidePanel();
 					},
-					showTask,
+					(task) => void showTask(task, ctx).catch((error: unknown) => ctx.ui.notify(String(error), "error")),
 					() => {
 						const tasks = sortTasks(state.tasks);
 						const labels = tasks.map((task) => `#${task.id} ${task.subject} · ${task.status}`);
 						void ctx.ui
 							.select("All tasks", labels)
-							.then((selected) => {
+							.then(async (selected) => {
 								const task = tasks[labels.indexOf(selected ?? "")];
-								if (task) showTask(task);
+								if (task)
+									await showTask(task, ctx).catch((error: unknown) => ctx.ui.notify(String(error), "error"));
 							})
 							.catch((error: unknown) => ctx.ui.notify(String(error), "error"));
 					},

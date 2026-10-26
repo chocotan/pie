@@ -2,8 +2,8 @@ import { type TUI, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-t
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { SubagentRecord } from "../src/extensions/subagents/index.ts";
 import { SubagentPanel } from "../src/extensions/subagents/panel.ts";
-import type { TaskState } from "../src/extensions/tasks/index.ts";
-import { TodoPanel } from "../src/extensions/tasks/view.ts";
+import type { TaskRecord, TaskState } from "../src/extensions/tasks/index.ts";
+import { TaskDetailView, TodoPanel } from "../src/extensions/tasks/view.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -81,14 +81,79 @@ describe("workflow floating and inline widgets", () => {
 			],
 		};
 		text = stripAnsi(panel.render(80).join("\n"));
-		expect(text).not.toContain("hidden");
-		expect(text).toContain("Todo · 7/7");
+		expect(text).toContain("+2 hidden · view all");
+		expect(text).toContain("Todo · 5/7");
 		expect(text).not.toContain("Done 0");
 		expect(text).toContain("Open 0");
 		panel.handleMouse(mouse(76, 0));
 		expect(close).toHaveBeenCalledOnce();
 	});
-	it.each([5, 10, 11, 20])("caps subagent rows at ten with a working overflow entrance (%s total)", (total) => {
+	it("renders task details in a bounded, scrollable view and closes with the configured cancel key", () => {
+		const done = vi.fn();
+		const requestRender = vi.fn();
+		const task: TaskRecord = {
+			id: "7",
+			subject: "Review the implementation",
+			description: Array.from({ length: 40 }, (_, index) => `Requirement line ${index + 1}`).join("\n"),
+			activeForm: "Reviewing implementation",
+			agentType: "reviewer",
+			owner: "worker-1",
+			status: "in_progress",
+			blockedBy: ["2", "3"],
+			metadata: {},
+		};
+		const detail = new TaskDetailView({ terminal: { rows: 15 }, requestRender } as unknown as TUI, task, done);
+		for (const width of [1, 2, 10, 20, 40, 80]) {
+			const lines = detail.render(width);
+			expect(lines).toHaveLength(12);
+			expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+		}
+		let rendered = stripAnsi(detail.render(80).join("\n"));
+		expect(rendered).toContain("Review the implementation");
+		expect(rendered).toContain("Requirement line 1");
+		expect(rendered).not.toContain("Requirement line 20");
+		detail.handleMouse({ ...mouse(0, 0), type: "wheel", button: "none", wheelDelta: 20 });
+		rendered = stripAnsi(detail.render(80).join("\n"));
+		expect(rendered).toContain("Requirement line 20");
+		expect(rendered).not.toContain("Requirement line 1\n");
+		detail.handleMouse({ ...mouse(0, 0), type: "wheel", button: "none", wheelDelta: 40 });
+		rendered = stripAnsi(detail.render(80).join("\n"));
+		expect(rendered).toContain("Current step: Reviewing implementation");
+		expect(rendered).toContain("Blocked by: #2, #3");
+		detail.handleInput("\x1b");
+		expect(done).toHaveBeenCalledOnce();
+		detail.handleMouse(mouse(76, 0));
+		expect(done).toHaveBeenCalledTimes(2);
+		expect(requestRender).toHaveBeenCalled();
+	});
+	it.each([10, 12, 24, 41])(
+		"keeps the task footer and last detail visible within an 80%% overlay (%s terminal rows)",
+		(rows) => {
+			const terminal = { rows };
+			const detail = new TaskDetailView(
+				{ terminal, requestRender: vi.fn() } as unknown as TUI,
+				{
+					id: "1",
+					subject: "Long task",
+					description: "A detailed requirement\n".repeat(40),
+					status: "pending",
+					blockedBy: ["2"],
+					metadata: {},
+				},
+				vi.fn(),
+			);
+			for (const height of [rows, rows + 3, rows]) {
+				terminal.rows = height;
+				detail.handleMouse({ ...mouse(0, 0), type: "wheel", button: "none", wheelDelta: 1000 });
+				const lines = detail.render(60).map(stripAnsi);
+				expect(lines).toHaveLength(Math.floor(height * 0.8));
+				expect(lines.slice(2, -2).join("\n")).toContain("Blocked by: #2");
+				expect(lines.at(-2)).toContain("scroll · escape/ctrl+c close");
+				expect(lines.at(-1)).toMatch(/^╰─+╯$/);
+			}
+		},
+	);
+	it.each([4, 5, 6, 10, 20])("caps subagent rows at five with a working overflow entrance (%s total)", (total) => {
 		const records: SubagentRecord[] = Array.from({ length: total }, (_, index) => ({
 			id: String(index),
 			agent: "worker",
@@ -111,7 +176,7 @@ describe("workflow floating and inline widgets", () => {
 			vi.fn(),
 		);
 		const rows = panel.render(80).map(stripAnsi);
-		const visible = Math.min(10, total);
+		const visible = Math.min(5, total);
 		expect(rows[0]).toContain(`${visible}/${total}`);
 		expect(rows.filter((line) => line.includes("●"))).toHaveLength(visible);
 		panel.handleMouse(mouse(3, visible));
@@ -124,7 +189,7 @@ describe("workflow floating and inline widgets", () => {
 		}
 		panel.dispose();
 	});
-	it.each([5, 10, 11, 20])("caps Todo entries at ten with a working overflow entrance (%s total)", (total) => {
+	it.each([4, 5, 6, 10, 20])("caps Todo entries at five with a working overflow entrance (%s total)", (total) => {
 		const state: TaskState = {
 			nextId: total + 1,
 			tasks: Array.from({ length: total }, (_, index) => ({
@@ -146,7 +211,7 @@ describe("workflow floating and inline widgets", () => {
 			more,
 		);
 		const rows = panel.render(80).map(stripAnsi);
-		const visible = Math.min(10, total);
+		const visible = Math.min(5, total);
 		expect(rows[0]).toContain(`${visible}/${total}`);
 		expect(rows.filter((line) => line.includes("#"))).toHaveLength(visible);
 		if (total > visible) {
@@ -256,6 +321,8 @@ describe("workflow floating and inline widgets", () => {
 			startedAt: 0,
 			finishedAt: 4000,
 			output: "done",
+			turns: 3,
+			maxTurns: 30,
 		};
 		const open = vi.fn();
 		const more = vi.fn();
@@ -272,6 +339,7 @@ describe("workflow floating and inline widgets", () => {
 		expect(rows[1]).toContain("Verify terminal layout");
 		expect(rows[2]).toContain("Review tool titles");
 		expect(rows[2]).toContain("4s");
+		expect(rows[2]).toContain("Review tool titles 3/30 4s");
 		panel.handleMouse(mouse(3, 2));
 		expect(open).toHaveBeenCalledWith(record);
 		panel.handleMouse(mouse(76, 0));
@@ -297,8 +365,8 @@ describe("workflow floating and inline widgets", () => {
 			close,
 		);
 		const mixedText = stripAnsi(mixed.render(80).join("\n"));
-		expect(mixedText).toContain("Subagents · 6/7");
-		expect(mixedText).toContain("+1 hidden");
+		expect(mixedText).toContain("Subagents · 5/7");
+		expect(mixedText).toContain("+2 hidden");
 		expect(mixedText).toContain("Running 0");
 		const crowded = new SubagentPanel(
 			ui,

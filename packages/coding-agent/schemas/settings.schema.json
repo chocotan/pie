@@ -144,6 +144,18 @@
         }
       }
     },
+    "compactModel": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[^/\\s]+/\\S+$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Summary model used by builtin:compact-model as \"provider/modelId\"; null uses the session model."
+    },
     "branchSummary": {
       "type": "object",
       "properties": {

@@ -17,13 +17,12 @@ import { DefaultResourceLoader } from "../../core/resource-loader.ts";
 import { createAgentSession } from "../../core/sdk.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
-import { formatToolDuration } from "../../core/tools/render-utils.ts";
 import { truncateMiddle } from "../../core/tools/truncate.ts";
 import { raceWithAbortSignal } from "../../utils/abort.ts";
 import { readTaskState, TASK_RUN_EVENT } from "../tasks/index.ts";
 import { discoverAgentDefinitions } from "./definitions.ts";
 import { SubagentPanel } from "./panel.ts";
-import { renderSubagentCall } from "./renderers.ts";
+import { renderSubagentCall, renderSubagentCompletion } from "./renderers.ts";
 import { SubagentDetailView } from "./view.ts";
 
 export const SUBAGENT_ENTRY = "pie.subagent";
@@ -36,11 +35,14 @@ const recordSchema = Type.Object({
 	status: StringEnum(["queued", "running", "completed", "error", "stopped", "interrupted"] as const),
 	model: Type.String(),
 	thinking: Type.String(),
+	turns: Type.Optional(Type.Integer({ minimum: 0 })),
+	maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
 	startedAt: Type.Number(),
 	finishedAt: Type.Optional(Type.Number()),
 	sessionFile: Type.Optional(Type.String()),
 	taskId: Type.Optional(Type.String()),
 	output: Type.String(),
+	stopReason: Type.Optional(Type.String()),
 	error: Type.Optional(Type.String()),
 	activeTool: Type.Optional(Type.String()),
 });
@@ -80,6 +82,7 @@ const codingToolNames = new Set(["read", "bash", "edit", "write", "grep", "find"
 
 export function createSubagentsExtension(options: { agentDir?: string } = {}): ExtensionFactory {
 	return (pi) => {
+		pi.registerMessageRenderer("pie.subagent-completion", renderSubagentCompletion);
 		const agentDir = options.agentDir ?? getAgentDir();
 		const records = new Map<string, SubagentRecord>();
 		const runs = new Map<string, Run>();
@@ -113,7 +116,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 		const viewResult = (record: SubagentRecord) =>
 			pi.sendMessage({
 				customType: "pie.subagent-result",
-				content: `${record.agent} · ${record.status}\n${record.output || record.error || "No output yet"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
+				content: `${record.agent} · ${record.status}\n${record.stopReason ? `${record.stopReason}\n` : ""}${record.output || record.error || "No output yet"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
 				display: true,
 				details: record,
 			});
@@ -353,6 +356,8 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 				description: args.description ?? definition.description,
 				prompt: args.prompt,
 				status: "queued",
+				turns: 0,
+				maxTurns: args.max_turns ?? 30,
 				startedAt: Date.now(),
 				output: "",
 				model: `${model.provider}/${model.id}`,
@@ -446,6 +451,11 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						refresh();
 						let turns = 0;
 						child.subscribe((event) => {
+							if (event.type === "turn_start") {
+								record.turns = Math.min((record.turns ?? 0) + 1, record.maxTurns ?? 30);
+								save(record);
+								refresh();
+							}
 							if (event.type === "message_update" && event.message.role === "assistant")
 								run.streaming = event.message;
 							if (event.type === "message_end") run.streaming = undefined;
@@ -469,13 +479,13 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						await child.prompt(prompt, { expandPromptTemplates: false });
 						record.output = truncateMiddle(child.getLastAssistantText() ?? "", 32 * 1024).content;
 						const last = child.messages.findLast((message) => message.role === "assistant");
-						record.status = controller.signal.aborted
-							? "stopped"
-							: limitReached ||
-									(last?.role === "assistant" && ["error", "aborted", "length"].includes(last.stopReason))
-								? "error"
-								: "completed";
-						if (limitReached) record.error = "Subagent turn limit reached";
+						record.status =
+							controller.signal.aborted || limitReached
+								? "stopped"
+								: last?.role === "assistant" && ["error", "aborted", "length"].includes(last.stopReason)
+									? "error"
+									: "completed";
+						if (limitReached) record.stopReason = "Subagent turn limit reached";
 						else if (last?.role === "assistant")
 							record.error =
 								last.stopReason === "length"
@@ -506,11 +516,10 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						reportTask(record, record.status === "completed" ? "completed" : "pending");
 						refresh();
 						if (!closing && (args.run_in_background ?? true)) {
-							const elapsed = formatToolDuration((record.finishedAt ?? Date.now()) - record.startedAt);
 							pi.sendMessage(
 								{
 									customType: "pie.subagent-completion",
-									content: `Subagent ${record.id} (${record.agent}) ${record.status}${elapsed === "" ? "" : ` in ${elapsed}`}.\n${record.output || record.error || "No output"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
+									content: `Subagent ${record.id} (${record.agent}) ${record.status}.\n${record.stopReason ? `${record.stopReason}\n` : ""}${record.output || record.error || "No output"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
 									display: true,
 									details: record,
 								},
@@ -543,11 +552,14 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 			content: [
 				{
 					type: "text",
-					text: `${record.id} · ${record.agent} · ${record.status}\n${record.output || record.error || "No output yet"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
+					text: `${record.id} · ${record.agent} · ${record.status}\n${record.stopReason ? `${record.stopReason}\n` : ""}${record.output || record.error || "No output yet"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
 				},
 			],
 			details: structuredClone(record),
-			isError: ["error", "stopped", "interrupted"].includes(record.status),
+			isError:
+				record.status === "error" ||
+				record.status === "interrupted" ||
+				(record.status === "stopped" && !record.stopReason),
 		});
 		pi.registerTool({
 			name: "Agent",

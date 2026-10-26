@@ -75,6 +75,7 @@ CLI tool options override this setting for one invocation. `--tools` with only `
 | `compaction.reserveTokens` | number | `16384` | Free context tokens below which automatic compaction starts. |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens retained without summarization. |
 | `compaction.modelOverrides` | object | None | Per-model token settings keyed by exact `provider/modelId`. |
+| `compactModel` | string or null | None | Summary model as `provider/modelId`, used by `builtin:compact-model`. Omit or set null to use the session model. See [Pie plugins](pie.md#compaction-model). |
 
 <a id="per-model-compaction-overrides"></a>
 

@@ -4644,15 +4644,13 @@ export class InteractiveMode {
 		if (expanded === this.toolOutputExpanded) return;
 
 		this.toolOutputExpanded = expanded;
+		// Duck-typed so headers, custom messages, and tool rows all respond; the
+		// optional containers keep focused tests and partial hosts working.
 		const activeHeader = this.customHeader ?? this.builtInHeader;
-		if (isExpandable(activeHeader)) {
-			activeHeader.setExpanded(expanded);
-		}
+		if (isExpandable(activeHeader)) activeHeader.setExpanded(expanded);
 		for (const container of [this.loadedResourcesContainer, this.chatContainer]) {
-			for (const child of container.children) {
-				if (isExpandable(child)) {
-					child.setExpanded(expanded);
-				}
+			for (const child of container?.children ?? []) {
+				if (isExpandable(child)) child.setExpanded(expanded);
 			}
 		}
 		this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
@@ -4998,6 +4996,7 @@ export class InteractiveMode {
 				{
 					autoCompact: this.session.autoCompactionEnabled,
 					watchdogModel: this.settingsManager.getWatchdogModel(),
+					compactModel: this.settingsManager.getCompactModel(),
 					defaultModel,
 					currentModel: this.session.model,
 					availableDefaultModels: this.session.modelRuntime.getAvailableSnapshot(),
@@ -5047,6 +5046,9 @@ export class InteractiveMode {
 					},
 					onWatchdogModelChange: (model) => {
 						this.settingsManager.setWatchdogModel(model);
+					},
+					onCompactModelChange: (model) => {
+						this.settingsManager.setCompactModel(model);
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);

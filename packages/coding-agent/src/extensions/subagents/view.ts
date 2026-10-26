@@ -28,6 +28,7 @@ export interface SubagentDetailSnapshot {
 	thinking: string;
 	startedAt: number;
 	finishedAt?: number;
+	stopReason?: string;
 	error?: string;
 	activeTool?: string;
 	messages: readonly AgentMessage[];
@@ -187,7 +188,15 @@ export class SubagentDetailView implements Component {
 		for (const message of messages) if (message.role === "toolResult") results.set(message.toolCallId, message);
 		const next = new Map<string, Entry>();
 		this.transcript.clear();
-		for (const [index, message] of messages.entries()) {
+		for (const [index, original] of messages.entries()) {
+			const stopped =
+				snapshot.status === "stopped" &&
+				snapshot.stopReason &&
+				index === messages.length - 1 &&
+				original.role === "assistant" &&
+				["aborted", "error"].includes(original.stopReason);
+			const message =
+				stopped && original.role === "assistant" ? { ...original, stopReason: "stop" as const } : original;
 			if (message.role !== "user" && message.role !== "assistant") continue;
 			const key = `${message.role}:${index}:${message.timestamp}`;
 			const signature = JSON.stringify(message);
@@ -214,6 +223,8 @@ export class SubagentDetailView implements Component {
 			}
 			next.set(key, { signature, component });
 			this.transcript.addChild(component);
+			if (stopped && original.role === "assistant" && original.errorMessage)
+				this.transcript.addChild(new Text(theme.fg("muted", original.errorMessage), 1, 0));
 			if (message.role !== "assistant") continue;
 			for (const part of message.content) {
 				if (part.type !== "toolCall") continue;
@@ -245,6 +256,7 @@ export class SubagentDetailView implements Component {
 				this.transcript.addChild(tool);
 			}
 		}
+		if (snapshot.stopReason) this.transcript.addChild(new Text(theme.fg("muted", snapshot.stopReason), 1, 0));
 		if (snapshot.error) this.transcript.addChild(new Text(theme.fg("error", snapshot.error), 1, 0));
 		this.entries.clear();
 		for (const [key, entry] of next) this.entries.set(key, entry);

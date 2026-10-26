@@ -137,6 +137,59 @@ describe("SettingsSelectorComponent", () => {
 		expect(onSessionShareDestinationChange.mock.calls.flat()).toEqual(["gist", "radius", "auto"]);
 	});
 
+	it("selects, persists, and clears the compaction model through its searchable submenu", async () => {
+		harness = await createHarness({ models: [{ id: "main" }, { id: "summary/vendor" }] });
+		const manager = harness.settingsManager;
+		const config = {
+			compactModel: manager.getCompactModel(),
+			defaultModel: "not set",
+			availableDefaultModels: harness.models,
+			modelThinkingLevels: {},
+		} as unknown as SettingsConfig;
+		const onCompactModelChange = vi.fn((model: string | null) => manager.setCompactModel(model));
+		const callbacks = { onCompactModelChange } as unknown as SettingsCallbacks;
+		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
+		for (const character of "Compaction model") list.handleInput(character);
+		list.handleInput("\r");
+		for (const character of "summary/vendor") list.handleInput(character);
+		list.handleInput("\r");
+		await manager.flush();
+		await manager.reload();
+		expect(manager.getCompactModel()).toBe("faux/summary/vendor");
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("faux/summary/vendor");
+
+		list.handleInput("\r");
+		list.handleInput("\x1b[A");
+		list.handleInput("\x1b[A");
+		list.handleInput("\r");
+		await manager.flush();
+		await manager.reload();
+		expect(manager.getCompactModel()).toBeNull();
+		expect(onCompactModelChange.mock.calls.flat()).toEqual(["faux/summary/vendor", null]);
+	});
+
+	it("can clear an unavailable compaction model and cancel without saving", () => {
+		const onCompactModelChange = vi.fn();
+		const config = {
+			compactModel: "missing/model",
+			defaultModel: "not set",
+			availableDefaultModels: [],
+			modelThinkingLevels: {},
+		} as unknown as SettingsConfig;
+		const list = new SettingsSelectorComponent(config, {
+			onCompactModelChange,
+		} as unknown as SettingsCallbacks).getSettingsList();
+		list.selectItem("compact-model");
+		list.handleInput("\r");
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("Currently unavailable");
+		list.handleInput("\x1b");
+		expect(onCompactModelChange).not.toHaveBeenCalled();
+		list.handleInput("\r");
+		list.handleInput("\x1b[A");
+		list.handleInput("\r");
+		expect(onCompactModelChange).toHaveBeenCalledExactlyOnceWith(null);
+	});
+
 	it("keeps the configured fixed theme marked while browsing", () => {
 		const config = {
 			defaultModel: "not set",

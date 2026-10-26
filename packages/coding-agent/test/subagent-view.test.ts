@@ -3,7 +3,7 @@ import { getKeybindings, setKeybindings, type TUI, type TuiMouseEvent, visibleWi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { type SubagentDetailSnapshot, SubagentDetailView } from "../src/extensions/subagents/view.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const previousKeys = getKeybindings();
@@ -59,6 +59,46 @@ describe("SubagentDetailView", () => {
 		setKeybindings(previousKeys);
 		vi.useRealTimers();
 	});
+	it.each(["aborted", "error"] as const)(
+		"renders a turn-limit %s as muted without changing saved messages",
+		(stopReason) => {
+			const current: SubagentDetailSnapshot = {
+				...snapshot(),
+				status: "running",
+				messages: [
+					...snapshot().messages,
+					fauxAssistantMessage("", {
+						stopReason: "error",
+						errorMessage: "Earlier provider failure",
+						timestamp: 6,
+					}),
+					fauxAssistantMessage("Interrupted answer", {
+						stopReason,
+						errorMessage: "This operation was aborted",
+						timestamp: 7,
+					}),
+				],
+			};
+			const view = new SubagentDetailView(
+				{ terminal: { rows: 30 }, requestRender: vi.fn() } as unknown as TUI,
+				() => current,
+				vi.fn(),
+			);
+			view.render(100);
+			current.status = "stopped";
+			current.stopReason = "Subagent turn limit reached";
+			const rendered = view.render(100).join("\n");
+			expect(rendered).toContain(theme.fg("muted", "Subagent turn limit reached"));
+			expect(rendered).toContain(theme.fg("muted", "This operation was aborted"));
+			expect(rendered).toContain(theme.fg("error", "Error: Earlier provider failure"));
+			const text = stripAnsi(rendered);
+			expect(text).toContain("Subagent turn limit reached");
+			expect(text).toContain("Final child answer");
+			expect(text).toContain("Interrupted answer");
+			expect(text).not.toContain("Error: This operation was aborted");
+			expect(current.messages.at(-1)).toMatchObject({ stopReason, errorMessage: "This operation was aborted" });
+		},
+	);
 	it("bounds its frame, preserves transcript order, and closes with keyboard or mouse", () => {
 		const done = vi.fn();
 		const ui = { terminal: { rows: 30 }, requestRender: vi.fn() } as unknown as TUI;

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Searchable **Compaction model** picker in `/settings`, with a **Follow current model** choice and persistent configuration.
+- Built-in `compact-model` plugin with a `compactModel` setting for using a separate model for manual and automatic compaction, preserving the default summary behavior and falling back on failure.
 - Replaceable `retry` plugin that owns automatic retry while loaded, retrying every failed turn except context overflow, continuing output-limited responses, nudging empty ones, supporting a per-session subagent policy through a system-prompt matcher, and adding `/retry status|reset`. Adapted from pi-retry.
 - `pi.setNativeRetryEnabled()` extension action, so a plugin that owns retry can disable the built-in agent-turn scheduler without patching private methods.
 
