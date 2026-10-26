@@ -4,6 +4,7 @@ import type { SubagentRecord } from "../src/extensions/subagents/index.ts";
 import { SubagentPanel } from "../src/extensions/subagents/panel.ts";
 import type { TaskRecord, TaskState } from "../src/extensions/tasks/index.ts";
 import { TaskDetailView, TodoPanel } from "../src/extensions/tasks/view.ts";
+import { formatMessageTime } from "../src/modes/interactive/components/message-time.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -189,6 +190,34 @@ describe("workflow floating and inline widgets", () => {
 		}
 		panel.dispose();
 	});
+	it("shows each subagent's start time next to its elapsed time", () => {
+		const now = Date.now();
+		const startedAt = now - 65_000;
+		const record: SubagentRecord = {
+			id: "started-at",
+			agent: "worker",
+			description: "Verify layout",
+			prompt: "",
+			status: "completed",
+			model: "faux/local",
+			thinking: "off",
+			startedAt,
+			finishedAt: now,
+			output: "",
+		};
+		const panel = new SubagentPanel(
+			{ terminal: { rows: 40 }, requestRender: vi.fn() } as unknown as TUI,
+			[record],
+			vi.fn(),
+			vi.fn(),
+			vi.fn(),
+		);
+		const row = stripAnsi(panel.render(80)[1] ?? "");
+		expect(row).toContain(formatMessageTime(startedAt));
+		expect(row).toContain("65s");
+		panel.dispose();
+	});
+
 	it.each([4, 5, 6, 10, 20])("caps Todo entries at five with a working overflow entrance (%s total)", (total) => {
 		const state: TaskState = {
 			nextId: total + 1,
@@ -339,7 +368,7 @@ describe("workflow floating and inline widgets", () => {
 		expect(rows[1]).toContain("Verify terminal layout");
 		expect(rows[2]).toContain("Review tool titles");
 		expect(rows[2]).toContain("4s");
-		expect(rows[2]).toContain("Review tool titles 3/30 4s");
+		expect(rows[2]).toContain(`Review tool titles 3/30 ${formatMessageTime(record.startedAt)} · 4s`);
 		panel.handleMouse(mouse(3, 2));
 		expect(open).toHaveBeenCalledWith(record);
 		panel.handleMouse(mouse(76, 0));

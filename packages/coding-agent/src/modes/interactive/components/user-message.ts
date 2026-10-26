@@ -1,8 +1,8 @@
-import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, visibleWidth } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
-import { appendMessageTime } from "./message-time.ts";
+import { formatMessageTime } from "./message-time.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -68,8 +68,16 @@ export class UserMessageComponent extends Container {
 			return lines;
 		}
 
+		// Markdown pads one blank row under the text; the time goes there so it stays
+		// inside the message background instead of being appended past its reset.
+		if (this.timestamp !== undefined) {
+			const label = theme.fg("muted", formatMessageTime(this.timestamp));
+			const gap = width - visibleWidth(label);
+			if (gap >= 2) lines[lines.length - 1] = theme.bg("userMessageBg", " ".repeat(gap) + label);
+		}
+
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
-		return appendMessageTime(lines, width, this.timestamp);
+		return lines;
 	}
 }

@@ -13,6 +13,7 @@
 ### Changed
 
 - Compaction summaries now include how long they took.
+- Tool and thinking headers, user messages, and subagent rows show their time on the right edge (`HH:MM` today, `Nh ago`/`Nd ago` earlier); subagent panel rows and details pair the start time with the elapsed time.
 - Changed thinking and tool rows: a thought stays collapsed with a one-line preview of its latest content while it streams, one click anywhere in an expanded tool or thought collapses it while a drag still selects text, and user messages, assistant messages, thinking headers, and tool headers show when they happened (`HH:MM` for today, `Nh ago` or `Nd ago` for earlier days).
 - Todo and Subagents floating panels now show at most five items, with a view-all entrance for the remaining records.
 - Background task and subagent completion notifications now show compact, expandable status summaries instead of transport type names and raw JSON.

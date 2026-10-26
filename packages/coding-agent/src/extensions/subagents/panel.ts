@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { ActivityDot } from "../../modes/interactive/components/activity-dot.ts";
 import { highlightHover } from "../../modes/interactive/components/hover-style.ts";
+import { formatMessageTime } from "../../modes/interactive/components/message-time.ts";
 import { theme } from "../../modes/interactive/theme/theme.ts";
 import { type SubagentRecord, sortSubagents } from "./index.ts";
 
@@ -74,7 +75,11 @@ export class SubagentPanel implements Component {
 				(record.status === "running" || record.status === "queued" ? Date.now() : record.startedAt);
 			const progress =
 				record.turns !== undefined && record.maxTurns !== undefined ? ` ${record.turns}/${record.maxTurns}` : "";
-			const duration = `${progress} ${Math.max(0, Math.floor((end - record.startedAt) / 1000))}s`;
+			// When it started, then how long it has run, so a long delegation stays dated.
+			const duration = `${progress} ${formatMessageTime(record.startedAt)} · ${Math.max(
+				0,
+				Math.floor((end - record.startedAt) / 1000),
+			)}s`;
 			const description = truncateToWidth(
 				record.description || record.agent,
 				Math.max(0, inner - duration.length - 2),

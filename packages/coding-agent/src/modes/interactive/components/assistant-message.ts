@@ -28,10 +28,13 @@ const MIN_THINKING_BODY_WIDTH_WITH_TIME = 12;
 
 /** Latest non-blank line of hidden thinking content, used as the collapsed preview. */
 function thinkingPreview(text: string): string | undefined {
-	const lines = text.split("\n");
-	for (let index = lines.length - 1; index >= 0; index--) {
-		const line = lines[index].trim();
+	let end = text.length;
+	while (end > 0) {
+		const start = text.lastIndexOf("\n", end - 1) + 1;
+		const line = text.slice(start, end).trim();
 		if (line.length > 0) return line;
+		if (start === 0) break;
+		end = start - 1;
 	}
 	return undefined;
 }
@@ -219,7 +222,7 @@ export class AssistantMessageComponent extends Container {
 				let headerHovered = false;
 				const headerText = `${hidden ? "▸" : "▾"} ${label}${elapsed}`;
 				// Hidden content still shows its latest line, so a collapsed thought is not blank.
-				const preview = hidden ? thinkingPreview(thinkingBlocks.join("\n\n")) : undefined;
+				const preview = hidden ? thinkingPreview(thinkingBlocks[thinkingBlocks.length - 1] ?? "") : undefined;
 				const clock = formatMessageTime(message.timestamp);
 				thinkingComponent.addChild({
 					render: (width) => {
@@ -268,7 +271,9 @@ export class AssistantMessageComponent extends Container {
 						return { handled: true };
 					}),
 				);
-				if (hasVisibleContentAfter) {
+				// An expanded thought keeps a separator before following content; a collapsed
+				// header is one dim line and hugs what comes next.
+				if (!hidden && hasVisibleContentAfter) {
 					this.contentContainer.addChild(new Spacer(1));
 				}
 			}

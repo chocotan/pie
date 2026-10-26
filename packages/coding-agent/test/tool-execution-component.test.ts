@@ -665,7 +665,11 @@ describe("ToolExecutionComponent parity", () => {
 			"/tmp",
 		);
 		component.updateResult({ content: [], isError: false, durationMs: 4200 });
-		expect(stripAnsi(component.render(80)[1])).toContain(formatMessageTime(timestamp));
+		const row = stripAnsi(component.render(80)[1]);
+		const time = formatMessageTime(timestamp);
+		expect(row).toContain(time);
+		// Right-aligned: the row ends with the time, not with title padding.
+		expect(row.trimEnd().endsWith(time)).toBe(true);
 		// A narrow header drops the time instead of overflowing the row.
 		for (const line of component.render(10)) expect(stripAnsi(line).length).toBeLessThanOrEqual(10);
 		component.dispose();

@@ -305,9 +305,14 @@ export class ToolExecutionComponent extends Container {
 				? `  ${theme.fg("muted", clockText)}`
 				: "";
 		const recordedError: unknown = this.result?.details?.error;
-		const errorText =
-			typeof recordedError === "string" ? recordedError.split("\n")[0] : this.getTextOutput().split("\n")[0];
-		const error = this.result?.isError ? ` · ${theme.fg("toolOutput", errorText)}` : "";
+		// Only failed tools need their output text; building it on every render of a
+		// successful tool copies the full output per frame.
+		const error = this.result?.isError
+			? ` · ${theme.fg(
+					"toolOutput",
+					typeof recordedError === "string" ? recordedError.split("\n")[0] : this.getTextOutput().split("\n")[0],
+				)}`
+			: "";
 		const budget = Math.max(
 			1,
 			available - visibleWidth(status) - 1 - visibleWidth(suffix) - visibleWidth(error) - visibleWidth(clock),
@@ -323,10 +328,14 @@ export class ToolExecutionComponent extends Container {
 			? `${theme.fg("toolTitle", theme.bold(this.toolName))} ${theme.fg("accent", description)}`
 			: sliceByColumn(renderedCall, leading, visibleWidth(plainCall.trim()));
 		const call = truncateToWidth(title, budget, "…");
-		const text =
-			truncateToWidth(`${status} ${call}${error}${suffix}`, Math.max(1, available - visibleWidth(clock)), "…") +
-			clock;
-		const line = " ".repeat(pad) + text + " ".repeat(Math.max(0, width - pad - visibleWidth(text)));
+		const text = truncateToWidth(
+			`${status} ${call}${error}${suffix}`,
+			Math.max(1, available - visibleWidth(clock)),
+			"…",
+		);
+		// The time sits at the right edge, like the thinking header, so a long title never hides it.
+		const gap = Math.max(0, width - pad - visibleWidth(text) - visibleWidth(clock));
+		const line = " ".repeat(pad) + text + " ".repeat(gap) + clock;
 		const color = this.result?.isError ? "toolErrorBg" : this.isPartial ? "toolPendingBg" : "toolSuccessBg";
 		return this.headerHovered ? highlightHover(line) : theme.bg(color, line);
 	}

@@ -3,6 +3,7 @@ import { getKeybindings, setKeybindings, type TUI, type TuiMouseEvent, visibleWi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { type SubagentDetailSnapshot, SubagentDetailView } from "../src/extensions/subagents/view.ts";
+import { formatMessageTime } from "../src/modes/interactive/components/message-time.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -179,6 +180,20 @@ describe("SubagentDetailView", () => {
 		expect(stripAnsi(view.render(100).join("\n"))).toContain("Filesystem");
 		view.dispose();
 	});
+	it("shows the start time and elapsed time in the metadata row", () => {
+		const now = Date.now();
+		const startedAt = now - 65_000;
+		const view = new SubagentDetailView(
+			{ terminal: { rows: 30 }, requestRender: vi.fn() } as unknown as TUI,
+			() => ({ ...snapshot(), status: "completed", startedAt, finishedAt: now, messages: [] }),
+			vi.fn(),
+		);
+		const text = stripAnsi(view.render(120).join("\n"));
+		expect(text).toContain(`started ${formatMessageTime(startedAt)}`);
+		expect(text).toContain("1m 5s");
+		view.dispose();
+	});
+
 	it("renders user content-block arrays from real saved child sessions", () => {
 		const current: SubagentDetailSnapshot = {
 			...snapshot(),
