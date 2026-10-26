@@ -252,6 +252,7 @@ export class SubagentDetailView implements Component {
 					tool.setArgsComplete();
 					if (result) tool.updateResult(result);
 					else if (running) tool.markExecutionStarted();
+					else tool.markSettled();
 				}
 				next.set(toolKey, { signature: toolSignature, component: tool });
 				this.transcript.addChild(tool);

@@ -21,6 +21,8 @@
 
 ### Fixed
 
+- Restored tool calls that never recorded a result no longer keep their spinner running; the 80ms timer re-rendered the whole transcript and pinned a CPU core in long sessions.
+- Thinking headers now end their time on the same right column as tool headers.
 - Fixed subagent turn-limit stops and their cancellation diagnostics being displayed as red execution errors, while preserving the existing abort and completion notification flow.
 - Fixed compaction and branch summaries failing with "generation hit the token cap" when reasoning used most of the fixed summary output limit. Summaries now use the model's output limit, and `compaction.reserveTokens` only controls when compaction starts ([#9512](https://github.com/earendil-works/pi/issues/9512), [#9075](https://github.com/earendil-works/pi/issues/9075)).
 - Fixed `models.schema.json` missing descriptions for provider and model fields, so editors showed no hints for them ([#10790](https://github.com/earendil-works/pi/issues/10790))

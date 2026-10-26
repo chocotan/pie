@@ -629,6 +629,30 @@ describe("ToolExecutionComponent parity", () => {
 		expect(expanded.match(/Check disk space/g)).toHaveLength(1);
 		component.dispose();
 	});
+	test("stops the spinner for a restored call that never produced a result", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"tool",
+			"orphan",
+			{},
+			{},
+			undefined,
+			{ requestRender } as unknown as TUI,
+			"/tmp",
+		);
+		// A live row starts the 80ms spinner that re-renders the whole transcript.
+		component.render(80);
+		expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+		component.markSettled();
+		expect(vi.getTimerCount()).toBe(0);
+		vi.advanceTimersByTime(1000);
+		expect(requestRender).not.toHaveBeenCalled();
+		expect(stripAnsi(component.render(80)[1])).toContain("●");
+		component.dispose();
+	});
+
 	test("animates queued and running dots and stops the timer on completion", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
@@ -673,6 +697,25 @@ describe("ToolExecutionComponent parity", () => {
 		// A narrow header drops the time instead of overflowing the row.
 		for (const line of component.render(10)) expect(stripAnsi(line).length).toBeLessThanOrEqual(10);
 		component.dispose();
+	});
+
+	test("reuses a settled row across frames and rebuilds when the result changes", () => {
+		const component = new ToolExecutionComponent(
+			"read",
+			"cache",
+			{ path: "notes.txt" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "first" }], details: undefined, isError: false });
+		component.setExpanded(true);
+		const first = component.render(80);
+		expect(component.render(80)).toBe(first);
+
+		component.updateResult({ content: [{ type: "text", text: "second" }], details: undefined, isError: false });
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("second");
 	});
 
 	test("renders every tool call independently", () => {

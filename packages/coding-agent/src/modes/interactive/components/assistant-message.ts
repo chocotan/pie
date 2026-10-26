@@ -60,8 +60,10 @@ function renderThinkingHeader(
 		preview === undefined || previewWidth < MIN_THINKING_PREVIEW_WIDTH
 			? truncateToWidth(styledTitle, bodyWidth, "…")
 			: `${styledTitle}${" ".repeat(THINKING_PREVIEW_GAP)}${theme.fg("muted", truncateToWidth(preview, previewWidth, "…"))}`;
-	const text = " ".repeat(pad) + body + " ".repeat(Math.max(0, bodyWidth - visibleWidth(body))) + clockSegment;
-	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+	const bodyPart = " ".repeat(pad) + body + " ".repeat(Math.max(0, bodyWidth - visibleWidth(body)));
+	// The clock sits on the last column, like tool headers and appended message times.
+	const gap = Math.max(0, width - visibleWidth(bodyPart) - visibleWidth(clockSegment));
+	return bodyPart + " ".repeat(gap) + clockSegment;
 }
 
 /**

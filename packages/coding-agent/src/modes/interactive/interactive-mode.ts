@@ -4151,6 +4151,8 @@ export class InteractiveMode {
 		}
 
 		for (const [toolCallId, component] of renderedPendingTools) {
+			// History rendering: a call without a result never finishes, so keep it static.
+			component.markSettled();
 			this.pendingTools.set(toolCallId, component);
 		}
 		this.ui.requestRender();

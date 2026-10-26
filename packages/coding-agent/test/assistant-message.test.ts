@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { formatMessageTime } from "../src/modes/interactive/components/message-time.ts";
@@ -81,6 +81,18 @@ describe("AssistantMessageComponent", () => {
 		// A narrow header drops the preview and time instead of overflowing.
 		for (const candidate of component.render(10)) expect(stripAnsi(candidate).length).toBeLessThanOrEqual(10);
 	});
+	test("reuses rendered lines across frames until the message changes", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(createAssistantMessage([{ type: "text", text: "first answer" }]));
+		const first = component.render(80);
+		expect(component.render(80)).toBe(first);
+
+		component.updateContent(createAssistantMessage([{ type: "text", text: "second answer" }]));
+		const updated = component.render(80);
+		expect(updated).not.toBe(first);
+		expect(stripAnsi(updated.join("\n"))).toContain("second answer");
+	});
+
 	test("keeps the Thought header through repeated mouse expansion and collapse", () => {
 		initTheme("dark");
 		const component = new AssistantMessageComponent(
@@ -267,7 +279,10 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 		const message = createAssistantMessage([{ type: "thinking", thinking: "reasoning" }]);
 		const component = new AssistantMessageComponent(message);
-		expect(stripAnsi(component.render(80).join("\n"))).toContain(formatMessageTime(message.timestamp));
+		const header = stripAnsi(component.render(80)[1] ?? "");
+		// The clock ends on the last column so thinking and tool rows line up.
+		expect(header.endsWith(formatMessageTime(message.timestamp))).toBe(true);
+		expect(visibleWidth(header)).toBe(80);
 	});
 
 	test("uses configured output padding for text and thinking", () => {

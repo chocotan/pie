@@ -259,6 +259,18 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
+	/**
+	 * A restored or abandoned call that never produced a result stays a static row.
+	 * Keeping it partial starts an 80ms spinner timer that re-renders every row.
+	 */
+	markSettled(): void {
+		if (!this.isPartial) return;
+		this.isPartial = false;
+		this.spinner?.dispose();
+		this.spinner = undefined;
+		this.updateDisplay();
+	}
+
 	setLeadingGap(enabled: boolean): void {
 		this.leadingSpacer.setLines(enabled ? 1 : 0);
 	}
@@ -292,7 +304,7 @@ export class ToolExecutionComponent extends Container {
 	private renderHeader(width: number): string {
 		const pad = Math.min(this.outputPad, Math.max(0, Math.floor((width - 1) / 2)));
 		const available = Math.max(1, width - 2 * pad);
-		let status = theme.fg(this.result?.isError ? "error" : "success", "●");
+		let status = theme.fg(this.result?.isError ? "error" : this.result ? "success" : "muted", "●");
 		if (this.isPartial && !this.result?.isError) {
 			this.spinner ??= new ActivityDot(this.ui);
 			status = this.spinner.renderDot();
