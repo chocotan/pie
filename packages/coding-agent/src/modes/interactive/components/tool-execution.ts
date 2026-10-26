@@ -31,6 +31,7 @@ import { ActivityDot } from "./activity-dot.ts";
 import { highlightHover } from "./hover-style.ts";
 import { keyHint } from "./keybinding-hints.ts";
 import { formatMessageTime } from "./message-time.ts";
+import { RenderCache } from "./render-cache.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
 
@@ -104,6 +105,7 @@ export class ToolExecutionComponent extends Container {
 		durationMs?: number;
 	};
 	private hideComponent = false;
+	private readonly renderCache = new RenderCache();
 
 	constructor(
 		toolName: string,
@@ -273,6 +275,7 @@ export class ToolExecutionComponent extends Container {
 
 	setLeadingGap(enabled: boolean): void {
 		this.leadingSpacer.setLines(enabled ? 1 : 0);
+		this.renderCache.invalidate();
 	}
 
 	setOutputPad(outputPad: number): void {
@@ -353,6 +356,12 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		// A running row animates (spinner, live timer), so only settled rows are cached.
+		if (this.isPartial) return this.buildLines(width);
+		return this.renderCache.render(`${width}|${this.headerHovered ? 1 : 0}`, () => this.buildLines(width));
+	}
+
+	private buildLines(width: number): string[] {
 		if (this.hideComponent) return [];
 		if (
 			this.getRenderShell() === "self" &&
@@ -393,6 +402,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private updateDisplay(): void {
+		this.renderCache.invalidate();
 		const bgFn = this.isPartial
 			? (text: string) => theme.bg("toolPendingBg", text)
 			: this.result?.isError

@@ -3,6 +3,7 @@ import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { formatMessageTime } from "./message-time.ts";
+import { RenderCache } from "./render-cache.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -18,6 +19,7 @@ export class UserMessageComponent extends Container {
 	private markdownTransformers: readonly MarkdownTransformer[];
 
 	private timestamp?: number;
+	private readonly renderCache = new RenderCache();
 	constructor(
 		text: string,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
@@ -39,7 +41,13 @@ export class UserMessageComponent extends Container {
 		this.rebuild();
 	}
 
+	override invalidate(): void {
+		this.renderCache.invalidate();
+		super.invalidate();
+	}
+
 	private rebuild(): void {
+		this.renderCache.invalidate();
 		this.clear();
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
 		// line, with identical output.
@@ -63,6 +71,11 @@ export class UserMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		// The clock label only changes once a minute, so the row survives frame redraws.
+		return this.renderCache.render(`${width}|${Math.floor(Date.now() / 60_000)}`, () => this.buildLines(width));
+	}
+
+	private buildLines(width: number): string[] {
 		const lines = super.render(width);
 		if (lines.length === 0) {
 			return lines;

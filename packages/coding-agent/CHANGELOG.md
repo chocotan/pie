@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Settled tool rows, assistant messages, and user messages reuse their rendered lines across frame redraws instead of re-measuring the whole transcript every frame; spinners and streaming content still redraw.
 - Restored tool calls that never recorded a result no longer keep their spinner running; the 80ms timer re-rendered the whole transcript and pinned a CPU core in long sessions.
 - Thinking headers now end their time on the same right column as tool headers.
 - Fixed subagent turn-limit stops and their cancellation diagnostics being displayed as red execution errors, while preserving the existing abort and completion notification flow.

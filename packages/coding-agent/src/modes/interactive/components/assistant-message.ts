@@ -14,6 +14,7 @@ import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { highlightHover } from "./hover-style.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { appendMessageTime, formatMessageTime } from "./message-time.ts";
+import { RenderCache } from "./render-cache.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -83,6 +84,7 @@ export class AssistantMessageComponent extends Container {
 	private globalThinkingVisibilityOverride?: boolean;
 	private readonly autoExpandLiveThinking: boolean;
 	private readonly thinkingTimes = new Map<number, { started: number; ended?: number }>();
+	private readonly renderCache = new RenderCache();
 
 	constructor(
 		message?: AssistantMessage,
@@ -112,6 +114,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override invalidate(): void {
+		this.renderCache.invalidate();
 		super.invalidate();
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
@@ -142,6 +145,10 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		return this.renderCache.render(String(width), () => this.buildLines(width));
+	}
+
+	private buildLines(width: number): string[] {
 		const lines = super.render(width);
 		if (lines.length === 0) return lines;
 		if (!this.hasToolCalls) {
@@ -154,6 +161,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
+		this.renderCache.invalidate();
 		this.lastMessage = message;
 		this.isStreaming = isStreaming;
 
@@ -261,6 +269,8 @@ export class AssistantMessageComponent extends Container {
 							const hovered = event.type === "move" && event.button === "none" && event.y === 0;
 							const changed = hovered !== headerHovered;
 							headerHovered = hovered;
+							// Hover is drawn inside these cached lines.
+							if (changed) this.renderCache.invalidate();
 							return hovered || changed ? { handled: true, render: changed } : undefined;
 						}
 						// The label row captures the press so repeated clicks keep toggling; the
