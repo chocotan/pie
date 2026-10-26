@@ -10,9 +10,10 @@ import {
 import { allowNetwork } from "./test-network-env.ts";
 
 const originalSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
+const publishedName = "@earendil-works/pi-coding-agent";
 const release = (version: string, note?: string) => ({
 	version: "1.2.0",
-	name: "@earendil-works/pi-coding-agent",
+	name: publishedName,
 	piConfig: { name: "pie", version, ...(note ? { note } : {}) },
 });
 beforeEach(() => {
@@ -33,7 +34,7 @@ describe("Pie version checks", () => {
 	it("checks this fork and compares product versions rather than upstream SDK versions", async () => {
 		const fetchMock = vi.fn(async () => Response.json(release("0.2.0")));
 		vi.stubGlobal("fetch", fetchMock);
-		await expect(checkForNewPiVersion("0.1.0")).resolves.toEqual({ version: "0.2.0" });
+		await expect(checkForNewPiVersion("0.1.0")).resolves.toEqual({ version: "0.2.0", packageName: publishedName });
 		expect(fetchMock).toHaveBeenCalledWith(
 			"https://raw.githubusercontent.com/chocotan/pie/main/packages/coding-agent/package.json",
 			expect.objectContaining({ headers: expect.objectContaining({ "User-Agent": "pie/0.1.0" }) }),
@@ -60,8 +61,21 @@ describe("Pie version checks", () => {
 			.mockRejectedValueOnce(new Error("fetch failed"))
 			.mockResolvedValueOnce(Response.json(release("0.2.0")));
 		vi.stubGlobal("fetch", fetchMock);
-		await expect(getLatestPiRelease("0.1.0", { retry: true })).resolves.toEqual({ version: "0.2.0" });
+		await expect(getLatestPiRelease("0.1.0", { retry: true })).resolves.toEqual({
+			version: "0.2.0",
+			packageName: publishedName,
+		});
 		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+	it("carries the published package name so a renamed package can self-update", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({ ...release("0.2.0"), name: "@new-scope/pie" })),
+		);
+		await expect(getLatestPiRelease("0.1.0")).resolves.toEqual({
+			version: "0.2.0",
+			packageName: "@new-scope/pie",
+		});
 	});
 	it("keeps automatic checks to one request", async () => {
 		const fetchMock = vi.fn().mockRejectedValue(new Error("fetch failed"));
@@ -74,7 +88,11 @@ describe("Pie version checks", () => {
 			"fetch",
 			vi.fn(async () => Response.json(release("0.2.0", " Pie changes "))),
 		);
-		await expect(getLatestPiRelease("0.1.0")).resolves.toEqual({ version: "0.2.0", note: "Pie changes" });
+		await expect(getLatestPiRelease("0.1.0")).resolves.toEqual({
+			version: "0.2.0",
+			packageName: publishedName,
+			note: "Pie changes",
+		});
 	});
 	it("respects disabled automatic checks while allowing direct queries", async () => {
 		process.env.PI_SKIP_VERSION_CHECK = "1";

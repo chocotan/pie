@@ -9,7 +9,6 @@ import {
 	runPrivateInquiry,
 } from "../../../vendor/pi-extension-utils/build/private-inquiry.js";
 
-
 import { DECISION_INVALID_ATTEMPT_LIMIT, type ValidDecision, validateDecisionArguments } from "./decision-protocol.ts";
 
 /**
