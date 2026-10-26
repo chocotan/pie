@@ -1,5 +1,6 @@
 import { Box, Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import type { CompactionSummaryMessage } from "../../../core/messages.ts";
+import { formatToolDuration } from "../../../core/tools/render-utils.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { keyText } from "./keybinding-hints.ts";
 
@@ -38,12 +39,14 @@ export class CompactionSummaryMessageComponent extends Box {
 		const content = new Container();
 
 		const tokenStr = this.message.tokensBefore.toLocaleString();
+		const elapsed = this.message.durationMs === undefined ? "" : formatToolDuration(this.message.durationMs);
+		const duration = elapsed === "" ? "" : ` in ${elapsed}`;
 		const label = theme.fg("customMessageLabel", `\x1b[1m[compaction]\x1b[22m`);
 		content.addChild(new Text(label, 0, 0));
 		content.addChild(new Spacer(1));
 
 		if (this.expanded) {
-			const header = `**Compacted from ${tokenStr} tokens**\n\n`;
+			const header = `**Compacted from ${tokenStr} tokens${duration}**\n\n`;
 			content.addChild(
 				new Markdown(header + this.message.summary, 0, 0, this.markdownTheme, {
 					color: (text: string) => theme.fg("customMessageText", text),
@@ -52,7 +55,7 @@ export class CompactionSummaryMessageComponent extends Box {
 		} else {
 			content.addChild(
 				new Text(
-					theme.fg("customMessageText", `Compacted from ${tokenStr} tokens (`) +
+					theme.fg("customMessageText", `Compacted from ${tokenStr} tokens${duration} (`) +
 						theme.fg("dim", keyText("app.tools.expand")) +
 						theme.fg("customMessageText", " to expand)"),
 					0,

@@ -1,8 +1,11 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_ACTIVITY_EVENT } from "../../src/extensions/background/registry.ts";
+import { mergeConfig } from "../../src/extensions/continue-watchdog/config.ts";
 import { createLockDecisionController } from "../../src/extensions/continue-watchdog/controller.ts";
+import { createObservableAgentHub } from "../../src/extensions/continue-watchdog/hub.ts";
 import { createContinueWatchdogExtension } from "../../src/extensions/continue-watchdog/index.ts";
+import * as privateDecision from "../../src/extensions/continue-watchdog/private-decision.ts";
 import { createTestExtensionsResult, createTestResourceLoader } from "../utilities.ts";
 import { createHarness, createTestUiContext, type Harness } from "./harness.ts";
 
@@ -18,6 +21,62 @@ describe("bundled continue watchdog", () => {
 	afterEach(() => {
 		harness?.cleanup();
 		harness = undefined;
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it.each([undefined, "faux/decision", "other/decision:low"])(
+		"uses decision model %s with main-model inheritance when unset",
+		async (model) => {
+			vi.useFakeTimers();
+			const execute = vi.spyOn(privateDecision, "runPrivateDecision").mockResolvedValue({ kind: "cancelled" });
+			const controller = createLockDecisionController({ maxContinue: 3 });
+			const extensionsResult = await createTestExtensionsResult([
+				createContinueWatchdogExtension({
+					hub: createObservableAgentHub(),
+					controller,
+					config: mergeConfig(model === undefined ? {} : { model }).config,
+				}),
+			]);
+			harness = await createHarness({ resourceLoader: createTestResourceLoader({ extensionsResult }) });
+			await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext() });
+			harness.setResponses([fauxAssistantMessage("done")]);
+			await harness.session.prompt("do the work");
+			const main = harness.session.model!;
+			await harness.session.prompt("/lock-continue-watchdog");
+			await vi.advanceTimersByTimeAsync(10_000);
+
+			expect(execute).toHaveBeenCalledOnce();
+			expect(execute.mock.calls[0]?.[0].fork.model).toBe(
+				model ?? `${main.provider}/${main.id}:${harness.session.thinkingLevel}`,
+			);
+			expect(harness.session.model).toBe(main);
+		},
+	);
+
+	it("reads watchdogModel from live settings before each decision", async () => {
+		vi.useFakeTimers();
+		const execute = vi.spyOn(privateDecision, "runPrivateDecision").mockResolvedValue({ kind: "cancelled" });
+		const controller = createLockDecisionController({ maxContinue: 3 });
+		const extensionsResult = await createTestExtensionsResult([
+			createContinueWatchdogExtension({
+				hub: createObservableAgentHub(),
+				controller,
+				config: mergeConfig({ model: "other/config-model:low" }).config,
+			}),
+		]);
+		harness = await createHarness({ resourceLoader: createTestResourceLoader({ extensionsResult }) });
+		await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext() });
+		harness.setResponses([fauxAssistantMessage("done")]);
+		await harness.session.prompt("do the work");
+
+		for (const model of ["faux/settings-model:off", "faux/another-model:low", undefined]) {
+			harness.settingsManager.setWatchdogModel(model);
+			await harness.session.prompt("/lock-continue-watchdog");
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(execute.mock.lastCall?.[0].fork.model).toBe(model ?? "other/config-model:low");
+		}
+		expect(execute).toHaveBeenCalledTimes(3);
 	});
 
 	function notified(notify: ReturnType<typeof vi.fn>, text: string): boolean {

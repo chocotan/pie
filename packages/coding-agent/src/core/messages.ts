@@ -64,6 +64,8 @@ export interface CompactionSummaryMessage {
 	summary: string;
 	tokensBefore: number;
 	timestamp: number;
+	/** Wall-clock duration of the compaction that produced this summary; absent for restored entries. */
+	durationMs?: number;
 }
 
 // Extend CustomAgentMessages via declaration merging
@@ -110,12 +112,14 @@ export function createCompactionSummaryMessage(
 	summary: string,
 	tokensBefore: number,
 	timestamp: string,
+	durationMs?: number,
 ): CompactionSummaryMessage {
 	return {
 		role: "compactionSummary",
 		summary: summary,
 		tokensBefore,
 		timestamp: new Date(timestamp).getTime(),
+		...(durationMs === undefined ? {} : { durationMs }),
 	};
 }
 

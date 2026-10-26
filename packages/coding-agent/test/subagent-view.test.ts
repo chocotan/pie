@@ -133,10 +133,10 @@ describe("SubagentDetailView", () => {
 		expect(lines[row + 2]).toContain("/dev/local");
 		expect(lines[row + 3]).toContain("disk.txt");
 		expect(lines.join("\n").match(/24ms/g)).toHaveLength(1);
-		expect(view.handleMouse(mouse(3, row + 1))?.handled).not.toBe(true);
-		expect(stripAnsi(view.render(100).join("\n"))).toContain("Filesystem");
-		expect(view.handleMouse(mouse(3, row))?.handled).toBe(true);
+		expect(view.handleMouse(mouse(3, row + 1))?.handled).toBe(true);
 		expect(stripAnsi(view.render(100).join("\n"))).not.toContain("Filesystem");
+		expect(view.handleMouse(mouse(3, row))?.handled).toBe(true);
+		expect(stripAnsi(view.render(100).join("\n"))).toContain("Filesystem");
 		view.dispose();
 	});
 	it("renders user content-block arrays from real saved child sessions", () => {
@@ -210,7 +210,9 @@ describe("SubagentDetailView", () => {
 	it("auto-expands streaming thought, collapses at the answer, and obeys remapped shortcuts", () => {
 		setKeybindings(new KeybindingsManager({ "app.thinking.toggle": "ctrl+x", "tui.select.cancel": "ctrl+q" }));
 		const done = vi.fn();
-		const thought = fauxAssistantMessage([{ type: "thinking", thinking: "live reasoning" }], { timestamp: 7 });
+		const thought = fauxAssistantMessage([{ type: "thinking", thinking: "live reasoning\nlatest detail" }], {
+			timestamp: 7,
+		});
 		let current: SubagentDetailSnapshot = { ...snapshot(), messages: [], streaming: thought, status: "running" };
 		const view = new SubagentDetailView(
 			{ terminal: { rows: 30 }, requestRender: vi.fn() } as unknown as TUI,
@@ -224,6 +226,7 @@ describe("SubagentDetailView", () => {
 			messages: [fauxAssistantMessage([...thought.content, { type: "text", text: "answer" }], { timestamp: 7 })],
 		};
 		expect(stripAnsi(view.render(100).join("\n"))).not.toContain("live reasoning");
+		expect(stripAnsi(view.render(100).join("\n"))).toContain("latest detail");
 		view.handleInput("\x18");
 		expect(stripAnsi(view.render(100).join("\n"))).toContain("live reasoning");
 		view.handleInput("\x11");

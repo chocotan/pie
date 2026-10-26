@@ -6,17 +6,60 @@ import {
 	MouseRegion,
 	Spacer,
 	Text,
-	TruncatedText,
+	truncateToWidth,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { highlightHover } from "./hover-style.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
-import { appendMessageTime } from "./message-time.ts";
+import { appendMessageTime, formatMessageTime } from "./message-time.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+/** Columns between the collapsed thinking label and its one-line preview. */
+const THINKING_PREVIEW_GAP = 2;
+/** Smallest preview width worth showing; below it the label keeps the whole line. */
+const MIN_THINKING_PREVIEW_WIDTH = 12;
+/** Body columns kept before the header time is dropped on narrow rows. */
+const MIN_THINKING_BODY_WIDTH_WITH_TIME = 12;
+
+/** Latest non-blank line of hidden thinking content, used as the collapsed preview. */
+function thinkingPreview(text: string): string | undefined {
+	const lines = text.split("\n");
+	for (let index = lines.length - 1; index >= 0; index--) {
+		const line = lines[index].trim();
+		if (line.length > 0) return line;
+	}
+	return undefined;
+}
+
+/** One-line thinking header: label on the left, truncated preview, then the time on the right. */
+function renderThinkingHeader(
+	title: string,
+	preview: string | undefined,
+	clockText: string | undefined,
+	width: number,
+	paddingX: number,
+): string {
+	const pad = Math.min(paddingX, Math.max(0, Math.floor((width - 1) / 2)));
+	const available = Math.max(1, width - pad * 2);
+	const clockSegment =
+		clockText !== undefined && available - visibleWidth(clockText) - 2 >= MIN_THINKING_BODY_WIDTH_WITH_TIME
+			? `  ${theme.fg("muted", clockText)}`
+			: "";
+	const bodyWidth = Math.max(1, available - visibleWidth(clockSegment));
+	const styledTitle = theme.italic(theme.fg("thinkingText", title));
+	const previewWidth = bodyWidth - visibleWidth(title) - THINKING_PREVIEW_GAP;
+	const body =
+		preview === undefined || previewWidth < MIN_THINKING_PREVIEW_WIDTH
+			? truncateToWidth(styledTitle, bodyWidth, "…")
+			: `${styledTitle}${" ".repeat(THINKING_PREVIEW_GAP)}${theme.fg("muted", truncateToWidth(preview, previewWidth, "…"))}`;
+	const text = " ".repeat(pad) + body + " ".repeat(Math.max(0, bodyWidth - visibleWidth(body))) + clockSegment;
+	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+}
 
 /**
  * Component that renders a complete assistant message
@@ -33,6 +76,7 @@ export class AssistantMessageComponent extends Container {
 	private isStreaming = false;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 	private globalThinkingVisibilityOverride?: boolean;
+	private readonly autoExpandLiveThinking: boolean;
 	private readonly thinkingTimes = new Map<number, { started: number; ended?: number }>();
 
 	constructor(
@@ -42,10 +86,12 @@ export class AssistantMessageComponent extends Container {
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
+		autoExpandLiveThinking = true,
 	) {
 		super();
 
 		this.hideThinkingBlock = hideThinkingBlock;
+		this.autoExpandLiveThinking = autoExpandLiveThinking;
 		this.markdownTheme = markdownTheme;
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
@@ -92,9 +138,12 @@ export class AssistantMessageComponent extends Container {
 
 	override render(width: number): string[] {
 		const lines = super.render(width);
-		if (this.hasToolCalls || lines.length === 0) return lines;
-		lines[0] = OSC133_ZONE_START + lines[0];
-		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		if (lines.length === 0) return lines;
+		if (!this.hasToolCalls) {
+			lines[0] = OSC133_ZONE_START + lines[0];
+			lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		}
+		// A message that only carries tool calls renders no row of its own; its tool header keeps the time.
 		if (!this.isStreaming) appendMessageTime(lines, width, this.lastMessage?.timestamp);
 		return lines;
 	}
@@ -152,10 +201,12 @@ export class AssistantMessageComponent extends Container {
 
 				const runIndex = thinkingRunIndex++;
 				const active = this.isStreaming && i === message.content.length - 1;
+				// A live run expands only in views that opt in; the transcript keeps the
+				// configured default so a long thought never pushes the answer off screen.
 				const hidden =
 					this.thinkingVisibilityOverrides.get(runIndex) ??
 					this.globalThinkingVisibilityOverride ??
-					(!active && this.hideThinkingBlock);
+					(!(active && this.autoExpandLiveThinking) && this.hideThinkingBlock);
 				if (this.isStreaming && !this.thinkingTimes.has(runIndex))
 					this.thinkingTimes.set(runIndex, { started: Date.now() });
 				const timing = this.thinkingTimes.get(runIndex);
@@ -166,14 +217,16 @@ export class AssistantMessageComponent extends Container {
 					: "";
 				const thinkingComponent = new Container();
 				let headerHovered = false;
-				const header = new TruncatedText(
-					theme.italic(theme.fg("thinkingText", `${hidden ? "▸" : "▾"} ${label}${elapsed}`)),
-					this.outputPad,
-					0,
-				);
+				const headerText = `${hidden ? "▸" : "▾"} ${label}${elapsed}`;
+				// Hidden content still shows its latest line, so a collapsed thought is not blank.
+				const preview = hidden ? thinkingPreview(thinkingBlocks.join("\n\n")) : undefined;
+				const clock = formatMessageTime(message.timestamp);
 				thinkingComponent.addChild({
-					render: (width) => header.render(width).map((line) => (headerHovered ? highlightHover(line) : line)),
-					invalidate: () => header.invalidate(),
+					render: (width) => {
+						const line = renderThinkingHeader(headerText, preview, clock, width, this.outputPad);
+						return [headerHovered ? highlightHover(line) : line];
+					},
+					invalidate: () => {},
 				});
 				if (!hidden) {
 					thinkingComponent.addChild(
@@ -205,6 +258,8 @@ export class AssistantMessageComponent extends Container {
 							headerHovered = hovered;
 							return hovered || changed ? { handled: true, render: changed } : undefined;
 						}
+						// The label row captures the press so repeated clicks keep toggling; the
+						// body leaves it unhandled so a drag there selects text instead.
 						if (event.button !== "left") return undefined;
 						if (event.type === "press" && event.y === 0) return { handled: true, render: false };
 						if (event.type !== "click") return undefined;

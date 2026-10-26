@@ -17,6 +17,7 @@ import { DefaultResourceLoader } from "../../core/resource-loader.ts";
 import { createAgentSession } from "../../core/sdk.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
+import { formatToolDuration } from "../../core/tools/render-utils.ts";
 import { truncateMiddle } from "../../core/tools/truncate.ts";
 import { raceWithAbortSignal } from "../../utils/abort.ts";
 import { readTaskState, TASK_RUN_EVENT } from "../tasks/index.ts";
@@ -504,16 +505,18 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						save(record);
 						reportTask(record, record.status === "completed" ? "completed" : "pending");
 						refresh();
-						if (!closing && (args.run_in_background ?? true))
+						if (!closing && (args.run_in_background ?? true)) {
+							const elapsed = formatToolDuration((record.finishedAt ?? Date.now()) - record.startedAt);
 							pi.sendMessage(
 								{
 									customType: "pie.subagent-completion",
-									content: `Subagent ${record.id} (${record.agent}) ${record.status}.\n${record.output || record.error || "No output"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
+									content: `Subagent ${record.id} (${record.agent}) ${record.status}${elapsed === "" ? "" : ` in ${elapsed}`}.\n${record.output || record.error || "No output"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
 									display: true,
 									details: record,
 								},
 								{ triggerTurn: true, deliverAs: "followUp" },
 							);
+						}
 					}
 				},
 			};

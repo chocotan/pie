@@ -48,6 +48,8 @@ export const MIN_CONTINUE = 1;
 export const MAX_CONTINUE = 10;
 
 export interface ContinueWatchdogConfig {
+	/** Private decision model, optionally suffixed with :thinking; defaults to the main session. */
+	model?: string;
 	/** @deprecated Accepted and preserved, but the inquiry fence is fixed at 10s. */
 	idleDelaySeconds: number;
 	/** Shared per-cycle budget for accepted continuations and callback suspensions. */
@@ -96,6 +98,7 @@ export const BUILT_IN_CONFIG: Readonly<ContinueWatchdogConfig> = Object.freeze({
 const MAX_DIAGNOSTIC_LENGTH = 240;
 
 const KNOWN_KEYS = new Set([
+	"model",
 	"idleDelaySeconds",
 	"maxContinue",
 	"decisionPrompt",
@@ -191,6 +194,15 @@ export function validateConfig(source: string, value: unknown): ConfigResult {
 	const input = value as Record<string, unknown>;
 	const config: ConfigLayer = {};
 	const diagnostics: ConfigDiagnostic[] = [];
+
+	if (Object.hasOwn(input, "model")) {
+		const model = input.model;
+		if (typeof model === "string" && model.trim().length > 0) {
+			config.model = model.trim();
+		} else {
+			diagnostics.push(diagnostic(source, "model must be a non-empty model id string"));
+		}
+	}
 
 	if (Object.hasOwn(input, "idleDelaySeconds")) {
 		const idle = input.idleDelaySeconds;
@@ -292,6 +304,9 @@ export function mergeConfig(global?: unknown, project?: unknown): MergeConfigRes
 
 	const config = copyBuiltIn();
 	for (const { config: partial } of layers) {
+		if (partial.model !== undefined) {
+			config.model = partial.model;
+		}
 		if (partial.idleDelaySeconds !== undefined) {
 			config.idleDelaySeconds = partial.idleDelaySeconds;
 		}

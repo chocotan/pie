@@ -51,6 +51,33 @@ describe("collapsible message components", () => {
 		expect(renderText(component)).not.toContain("compaction details");
 	});
 
+	test("shows the recorded compaction duration in both states", () => {
+		const tokens = (1234).toLocaleString();
+		const component = new CompactionSummaryMessageComponent({
+			role: "compactionSummary",
+			summary: "compaction details",
+			tokensBefore: 1234,
+			timestamp: Date.now(),
+			durationMs: 4200,
+		});
+
+		expect(renderText(component)).toContain(`Compacted from ${tokens} tokens in 4.2s`);
+		clickRow(component, "[compaction]");
+		expect(renderText(component)).toContain(`Compacted from ${tokens} tokens in 4.2s`);
+	});
+
+	test("omits the compaction duration when it was not recorded", () => {
+		const tokens = (1234).toLocaleString();
+		const component = new CompactionSummaryMessageComponent({
+			role: "compactionSummary",
+			summary: "compaction details",
+			tokensBefore: 1234,
+			timestamp: Date.now(),
+		});
+
+		expect(renderText(component)).toContain(`Compacted from ${tokens} tokens (`);
+	});
+
 	test("toggles a branch summary when clicked", () => {
 		const component = new BranchSummaryMessageComponent({
 			role: "branchSummary",

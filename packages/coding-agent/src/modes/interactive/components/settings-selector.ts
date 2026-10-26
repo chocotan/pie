@@ -61,6 +61,7 @@ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 export interface SettingsConfig {
 	autoCompact: boolean;
 	defaultModel: string;
+	watchdogModel?: string;
 	currentModel?: Model<any>;
 	availableDefaultModels: readonly Model<any>[];
 	showImages: boolean;
@@ -105,6 +106,7 @@ export interface SettingsConfig {
 
 export interface SettingsCallbacks {
 	onAutoCompactChange: (enabled: boolean) => void;
+	onWatchdogModelChange: (model: string | undefined) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onImageWidthCellsChange: (width: number) => void;
 	onAutoResizeImagesChange: (enabled: boolean) => void;
@@ -489,6 +491,41 @@ export class SettingsSelectorComponent extends Container {
 				description: "Automatically compact context when it gets too large",
 				currentValue: config.autoCompact ? "true" : "false",
 				values: ["true", "false"],
+			},
+			{
+				id: "watchdog-model",
+				label: "Watchdog model",
+				description: "Model used for private continuation checks; ordinary work keeps the main session model",
+				currentValue: config.watchdogModel ?? "default",
+				submenu: (currentValue, done) => {
+					const options: SelectItem[] = [
+						{
+							value: CLEAR_OVERRIDE_VALUE,
+							label: "Default",
+							description: "Use the watchdog config model, or the main session model when unset",
+						},
+						...config.availableDefaultModels.map((model) => ({
+							value: modelSettingKey(model),
+							label: modelItemLabel(model),
+						})),
+					];
+					if (currentValue !== "default" && !options.some((option) => option.value === currentValue)) {
+						options.push({ value: currentValue, label: currentValue, description: "Configured model" });
+					}
+					return new SelectSubmenu(
+						"Watchdog Model",
+						"Select a model for private continuation checks",
+						options,
+						currentValue === "default" ? CLEAR_OVERRIDE_VALUE : currentValue,
+						(value) => {
+							callbacks.onWatchdogModelChange(value === CLEAR_OVERRIDE_VALUE ? undefined : value);
+							done(value === CLEAR_OVERRIDE_VALUE ? "default" : value);
+						},
+						() => done(),
+						undefined,
+						{ searchable: true, layout: MODEL_PICKER_LAYOUT },
+					);
+				},
 			},
 			{
 				id: "steering-mode",

@@ -538,6 +538,7 @@ export class InteractiveMode {
 
 	// Auto-compaction state
 	private autoCompactionEscapeHandler?: () => void;
+	private compactionStartedAt?: number;
 
 	// Auto-retry state
 	private retryEscapeHandler?: () => void;
@@ -3552,6 +3553,8 @@ export class InteractiveMode {
 						this.hiddenThinkingLabel,
 						this.outputPad,
 						this.getMarkdownTransformers(),
+						// Keep a live thought collapsed: its one-line preview updates in place.
+						false,
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
@@ -3576,6 +3579,7 @@ export class InteractiveMode {
 										showImages: this.settingsManager.getShowImages(),
 										imageWidthCells: this.settingsManager.getImageWidthCells(),
 										outputPad: this.outputPad,
+										timestamp: this.streamingMessage.timestamp,
 									},
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
@@ -3655,6 +3659,7 @@ export class InteractiveMode {
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
 							outputPad: this.outputPad,
+							timestamp: Date.now(),
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
@@ -3719,6 +3724,7 @@ export class InteractiveMode {
 			}
 
 			case "compaction_start": {
+				this.compactionStartedAt = Date.now();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3739,6 +3745,9 @@ export class InteractiveMode {
 			}
 
 			case "compaction_end": {
+				const compactionDurationMs =
+					this.compactionStartedAt === undefined ? undefined : Date.now() - this.compactionStartedAt;
+				this.compactionStartedAt = undefined;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -3766,6 +3775,7 @@ export class InteractiveMode {
 							event.result.summary,
 							event.result.tokensBefore,
 							new Date().toISOString(),
+							compactionDurationMs,
 						),
 					);
 					if (event.result.usage) {
@@ -4097,6 +4107,7 @@ export class InteractiveMode {
 								showImages: this.settingsManager.getShowImages(),
 								imageWidthCells: this.settingsManager.getImageWidthCells(),
 								outputPad: this.outputPad,
+								timestamp: message.timestamp,
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
@@ -4633,8 +4644,16 @@ export class InteractiveMode {
 		if (expanded === this.toolOutputExpanded) return;
 
 		this.toolOutputExpanded = expanded;
-		for (const child of this.chatContainer.children) {
-			if (child instanceof ToolExecutionComponent) child.setExpanded(expanded);
+		const activeHeader = this.customHeader ?? this.builtInHeader;
+		if (isExpandable(activeHeader)) {
+			activeHeader.setExpanded(expanded);
+		}
+		for (const container of [this.loadedResourcesContainer, this.chatContainer]) {
+			for (const child of container.children) {
+				if (isExpandable(child)) {
+					child.setExpanded(expanded);
+				}
+			}
 		}
 		this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
 	}
@@ -4978,6 +4997,7 @@ export class InteractiveMode {
 			selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
+					watchdogModel: this.settingsManager.getWatchdogModel(),
 					defaultModel,
 					currentModel: this.session.model,
 					availableDefaultModels: this.session.modelRuntime.getAvailableSnapshot(),
@@ -5024,6 +5044,9 @@ export class InteractiveMode {
 					onAutoCompactChange: (enabled) => {
 						this.session.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
+					},
+					onWatchdogModelChange: (model) => {
+						this.settingsManager.setWatchdogModel(model);
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);

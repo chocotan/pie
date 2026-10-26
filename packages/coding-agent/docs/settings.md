@@ -12,6 +12,7 @@ Add `"$schema": "https://pi.dev/schemas/settings.schema.json"` to `settings.json
 |---|---|---|---|
 | `defaultProvider` | string | Automatic | Startup AI provider. |
 | `defaultModel` | string | Automatic | Startup model ID. |
+| `watchdogModel` | string | Watchdog config or main session | Private continuation-check model as `provider/modelId`, optionally with `:thinking`. Select it in `/settings` → **Watchdog model**. Changes apply to the next check. |
 | `defaultThinkingLevel` | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"medium"` | Startup thinking level. |
 | `modelThinkingLevels` | object | None | Per-model startup thinking levels keyed by exact `provider/modelId`. |
 | `thinkingBudgets` | object | Built-in budgets | Token budgets for `minimal`, `low`, `medium`, and `high` thinking levels. |

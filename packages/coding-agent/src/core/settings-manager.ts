@@ -700,6 +700,20 @@ export class SettingsManager {
 		return this.settings.defaultModel;
 	}
 
+	getWatchdogModel(): string | undefined {
+		const model = this.settings.watchdogModel;
+		return typeof model === "string" && model.trim() ? model.trim() : undefined;
+	}
+
+	setWatchdogModel(model: string | undefined): void {
+		if (model !== undefined && (typeof model !== "string" || !model.trim())) {
+			throw new Error("Invalid watchdogModel setting: expected a non-empty model id string");
+		}
+		this.globalSettings.watchdogModel = model?.trim();
+		this.markModified("watchdogModel");
+		this.save();
+	}
+
 	setDefaultProvider(provider: string): void {
 		this.globalSettings.defaultProvider = provider;
 		this.markModified("defaultProvider");

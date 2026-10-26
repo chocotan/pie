@@ -209,6 +209,13 @@ export const SettingsSchema = Type.Object(
 		lastChangelogVersion: Type.Optional(Type.String()),
 		defaultProvider: Type.Optional(Type.String()),
 		defaultModel: Type.Optional(Type.String()),
+		watchdogModel: Type.Optional(
+			Type.String({
+				pattern: "\\S",
+				description:
+					"Private watchdog decision model as provider/modelId, optionally with a :thinking suffix. Overrides pi-continue-watchdog.json; unset uses its model or the main session.",
+			}),
+		),
 		defaultThinkingLevel: Type.Optional(ModelThinkingLevelSchema),
 		modelThinkingLevels: Type.Optional(
 			Type.Record(Type.String(), ModelThinkingLevelSchema, {

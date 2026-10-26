@@ -229,7 +229,7 @@ export class SubagentDetailView implements Component {
 								part.name,
 								part.id,
 								part.arguments,
-								{ showImages: false },
+								{ showImages: false, timestamp: message.timestamp },
 								toolRenderers[part.name as keyof typeof toolRenderers],
 								this.ui,
 								process.cwd(),
