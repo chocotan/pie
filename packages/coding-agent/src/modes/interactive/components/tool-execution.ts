@@ -30,7 +30,7 @@ import { theme } from "../theme/theme.ts";
 import { ActivityDot } from "./activity-dot.ts";
 import { highlightHover } from "./hover-style.ts";
 import { keyHint } from "./keybinding-hints.ts";
-import { formatMessageTime } from "./message-time.ts";
+import { formatMessageTime, TIME_RIGHT_RESERVE } from "./message-time.ts";
 import { RenderCache } from "./render-cache.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
@@ -88,6 +88,7 @@ export class ToolExecutionComponent extends Container {
 	private spinner?: ActivityDot;
 	private headerHovered = false;
 	private readonly leadingSpacer = new Spacer(1);
+	private leadingGap = true;
 	private showImages: boolean;
 	private imageWidthCells: number;
 	private outputPad: number;
@@ -281,6 +282,8 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	setLeadingGap(enabled: boolean): void {
+		if (enabled === this.leadingGap) return;
+		this.leadingGap = enabled;
 		this.leadingSpacer.setLines(enabled ? 1 : 0);
 		this.renderCache.invalidate();
 	}
@@ -337,7 +340,13 @@ export class ToolExecutionComponent extends Container {
 			: "";
 		const budget = Math.max(
 			1,
-			available - visibleWidth(status) - 1 - visibleWidth(suffix) - visibleWidth(error) - visibleWidth(clock),
+			available -
+				TIME_RIGHT_RESERVE -
+				visibleWidth(status) -
+				1 -
+				visibleWidth(suffix) -
+				visibleWidth(error) -
+				visibleWidth(clock),
 		);
 		const renderedCall =
 			(this.callRendererComponent ?? this.createCallFallback())
@@ -352,12 +361,13 @@ export class ToolExecutionComponent extends Container {
 		const call = truncateToWidth(title, budget, "…");
 		const text = truncateToWidth(
 			`${status} ${call}${error}${suffix}`,
-			Math.max(1, available - visibleWidth(clock)),
+			Math.max(1, available - TIME_RIGHT_RESERVE - visibleWidth(clock)),
 			"…",
 		);
 		// The time sits at the right edge, like the thinking header, so a long title never hides it.
-		const gap = Math.max(0, width - pad - visibleWidth(text) - visibleWidth(clock));
-		const line = " ".repeat(pad) + text + " ".repeat(gap) + clock;
+		// The reserved column keeps the transcript's auto scrollbar off its last digit.
+		const gap = Math.max(0, width - TIME_RIGHT_RESERVE - pad - visibleWidth(text) - visibleWidth(clock));
+		const line = " ".repeat(pad) + text + " ".repeat(gap) + clock + " ".repeat(TIME_RIGHT_RESERVE);
 		const color = this.result?.isError ? "toolErrorBg" : this.isPartial ? "toolPendingBg" : "toolSuccessBg";
 		return this.headerHovered ? highlightHover(line) : theme.bg(color, line);
 	}

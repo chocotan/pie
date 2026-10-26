@@ -1,6 +1,12 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 
+/**
+ * The fullscreen transcript's auto scrollbar overlays the last column, so right-aligned time
+ * labels stop one column short of it and keep their last digit readable.
+ */
+export const TIME_RIGHT_RESERVE = 1;
+
 /** Clock time for a message. Same-day messages show the time; older ones show their age. */
 // Intl formatting costs ~40us; components ask on every render, so memoize per minute.
 let clockCache = new Map<number, string>();
@@ -31,8 +37,9 @@ function formatMessageTimeUncached(timestamp: number, now: number): string {
 export function appendMessageTime(lines: string[], width: number, timestamp: number | undefined): string[] {
 	if (!timestamp || lines.length === 0) return lines;
 	const label = theme.fg("muted", formatMessageTime(timestamp));
-	const gap = Math.max(2, width - visibleWidth(lines[lines.length - 1]) - visibleWidth(label));
+	const available = Math.max(1, width - TIME_RIGHT_RESERVE);
+	const gap = Math.max(2, available - visibleWidth(lines[lines.length - 1]) - visibleWidth(label));
 	lines[lines.length - 1] += " ".repeat(gap) + label;
-	lines[lines.length - 1] = truncateToWidth(lines[lines.length - 1], width, "");
+	lines[lines.length - 1] = truncateToWidth(lines[lines.length - 1], available, "");
 	return lines;
 }

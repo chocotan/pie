@@ -507,6 +507,9 @@ export class InteractiveMode {
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private readonly entriesRenderedByBoundaryCompaction = new Set<string>();
 	private streamingMessage: AssistantMessage | undefined = undefined;
+	/** Coalesce streaming text/thinking updates: each one reparses the whole accumulated Markdown. */
+	private static readonly STREAMING_UPDATE_INTERVAL_MS = 100;
+	private streamingUpdateTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -3397,6 +3400,26 @@ export class InteractiveMode {
 		});
 	}
 
+	/**
+	 * Apply the latest streaming message at most once per interval. Every delta re-renders the whole
+	 * accumulated Markdown, so a fast thinking stream would otherwise rebuild it many times a second.
+	 */
+	private scheduleStreamingUpdate(): void {
+		if (this.streamingUpdateTimer) return;
+		this.streamingUpdateTimer = setTimeout(() => {
+			this.streamingUpdateTimer = undefined;
+			if (!this.streamingComponent || !this.streamingMessage) return;
+			this.streamingComponent.updateContent(this.streamingMessage, true);
+			this.ui.requestRender();
+		}, InteractiveMode.STREAMING_UPDATE_INTERVAL_MS);
+	}
+
+	private flushStreamingUpdate(): void {
+		if (!this.streamingUpdateTimer) return;
+		clearTimeout(this.streamingUpdateTimer);
+		this.streamingUpdateTimer = undefined;
+	}
+
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
@@ -3523,7 +3546,7 @@ export class InteractiveMode {
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage, true);
+					this.scheduleStreamingUpdate();
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
@@ -3560,6 +3583,7 @@ export class InteractiveMode {
 			case "message_end":
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
+					this.flushStreamingUpdate();
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
@@ -7163,6 +7187,7 @@ export class InteractiveMode {
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
 		this.turnClock.dispose();
+		this.flushStreamingUpdate();
 		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);

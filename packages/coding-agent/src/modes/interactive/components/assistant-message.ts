@@ -13,7 +13,7 @@ import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { highlightHover } from "./hover-style.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
-import { appendMessageTime, formatMessageTime } from "./message-time.ts";
+import { appendMessageTime, formatMessageTime, TIME_RIGHT_RESERVE } from "./message-time.ts";
 import { RenderCache } from "./render-cache.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -62,9 +62,11 @@ function renderThinkingHeader(
 			? truncateToWidth(styledTitle, bodyWidth, "…")
 			: `${styledTitle}${" ".repeat(THINKING_PREVIEW_GAP)}${theme.fg("muted", truncateToWidth(preview, previewWidth, "…"))}`;
 	const bodyPart = " ".repeat(pad) + body + " ".repeat(Math.max(0, bodyWidth - visibleWidth(body)));
-	// The clock sits on the last column, like tool headers and appended message times.
-	const gap = Math.max(0, width - visibleWidth(bodyPart) - visibleWidth(clockSegment));
-	return bodyPart + " ".repeat(gap) + clockSegment;
+	// The clock sits on the right edge, like tool headers and appended message times. The reserved
+	// column keeps the transcript's auto scrollbar off its last digit.
+	const gap = Math.max(0, width - TIME_RIGHT_RESERVE - visibleWidth(bodyPart) - visibleWidth(clockSegment));
+	const line = bodyPart + " ".repeat(gap) + clockSegment;
+	return line + " ".repeat(Math.max(0, width - visibleWidth(line)));
 }
 
 /**
@@ -161,8 +163,13 @@ export class AssistantMessageComponent extends Container {
 			lines[0] = OSC133_ZONE_START + lines[0];
 			lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
 		}
+		// A thinking header already carries the clock on its own row.
+		const lastVisible = this.lastMessage?.content.findLast(
+			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
+		);
 		// A message that only carries tool calls renders no row of its own; its tool header keeps the time.
-		if (!this.isStreaming) appendMessageTime(lines, width, this.lastMessage?.timestamp);
+		if (!this.isStreaming && lastVisible?.type !== "thinking")
+			appendMessageTime(lines, width, this.lastMessage?.timestamp);
 		return lines;
 	}
 

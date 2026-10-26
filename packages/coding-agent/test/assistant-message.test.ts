@@ -291,8 +291,10 @@ describe("AssistantMessageComponent", () => {
 		const message = createAssistantMessage([{ type: "thinking", thinking: "reasoning" }]);
 		const component = new AssistantMessageComponent(message);
 		const header = stripAnsi(component.render(80)[1] ?? "");
-		// The clock ends on the last column so thinking and tool rows line up.
-		expect(header.endsWith(formatMessageTime(message.timestamp))).toBe(true);
+		// The clock ends one column short of the edge so the transcript's auto scrollbar cannot
+		// cover its last digit; thinking and tool rows still line up.
+		expect(header.trimEnd().endsWith(formatMessageTime(message.timestamp))).toBe(true);
+		expect(header.endsWith(" ")).toBe(true);
 		expect(visibleWidth(header)).toBe(80);
 	});
 

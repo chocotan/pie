@@ -756,8 +756,10 @@ describe("ToolExecutionComponent parity", () => {
 		const row = stripAnsi(component.render(80)[1]);
 		const time = formatMessageTime(timestamp);
 		expect(row).toContain(time);
-		// Right-aligned: the row ends with the time, not with title padding.
+		// Right-aligned: the row ends with the time, not with title padding. The last column stays
+		// blank so the transcript's auto scrollbar cannot cover the time's last digit.
 		expect(row.trimEnd().endsWith(time)).toBe(true);
+		expect(row.endsWith(" ")).toBe(true);
 		// A narrow header drops the time instead of overflowing the row.
 		for (const line of component.render(10)) expect(stripAnsi(line).length).toBeLessThanOrEqual(10);
 		component.dispose();

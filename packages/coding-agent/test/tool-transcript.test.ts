@@ -67,6 +67,34 @@ describe("tool transcript layout", () => {
 			} else expect(lines).toHaveLength(3);
 		},
 	);
+	it("keeps settled tool rows cached across transcript redraws until their spacing changes", () => {
+		const transcript = new ToolTranscriptContainer();
+		const first = shell("first");
+		const separator = new Text("", 0, 0);
+		const second = shell("second");
+		transcript.addChild(first);
+		transcript.addChild(separator);
+		transcript.addChild(second);
+
+		const initial = transcript.render(100);
+		const firstRows = first.render(100);
+		const secondRows = second.render(100);
+		expect(secondRows).toHaveLength(1);
+
+		expect(transcript.render(100)).toEqual(initial);
+		expect(first.render(100)).toBe(firstRows);
+		expect(second.render(100)).toBe(secondRows);
+
+		separator.setText("Next step");
+		const separated = transcript.render(100).map(stripAnsi);
+		expect(first.render(100)).toBe(firstRows);
+		expect(second.render(100)).toHaveLength(2);
+		expect(separated[separated.indexOf("Next step") + 1]).toBe("");
+
+		separator.setText("");
+		expect(transcript.render(100)).toEqual(initial);
+		expect(second.render(100)).toHaveLength(1);
+	});
 	it("joins tool-only turns and uses the same layout for rendering and mouse dispatch", () => {
 		const transcript = new ToolTranscriptContainer();
 		transcript.addChild(new Text("Checking free space.", 0, 0));

@@ -2,7 +2,7 @@ import { Container, Markdown, type MarkdownTheme, visibleWidth } from "@earendil
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
-import { formatMessageTime } from "./message-time.ts";
+import { formatMessageTime, TIME_RIGHT_RESERVE } from "./message-time.ts";
 import { RenderCache } from "./render-cache.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -99,8 +99,9 @@ export class UserMessageComponent extends Container {
 		// inside the message background instead of being appended past its reset.
 		if (this.messageTime !== undefined) {
 			const label = theme.fg("muted", formatMessageTime(this.messageTime));
-			const gap = width - visibleWidth(label);
-			if (gap >= 2) lines[lines.length - 1] = theme.bg("userMessageBg", " ".repeat(gap) + label);
+			// Keep the reserved column free so the transcript's auto scrollbar never covers the time.
+			const gap = width - TIME_RIGHT_RESERVE - visibleWidth(label);
+			if (gap >= 2) lines[lines.length - 1] = theme.bg("userMessageBg", `${" ".repeat(gap) + label} `);
 		}
 
 		lines[0] = OSC133_ZONE_START + lines[0];
