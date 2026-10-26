@@ -13,7 +13,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { chatSetup, openChat, waitFor } from "./chat-support.ts";
 import { addTool } from "./harness-support.ts";
-import { context, documentChanges } from "./session-support.ts";
+import { context, documentChanges, observeCommits } from "./session-support.ts";
 
 type Action = (api: ToolExecutionApi) => void | Promise<void>;
 
@@ -52,7 +52,7 @@ async function drive(outputLimits: ToolRegistration["outputLimits"] = {}) {
 	]);
 	const { harness, root } = await openChat(new MemoryStorage(), setup);
 	const commits: Op[][] = [];
-	harness.subscribeCommits((publication) => {
+	observeCommits(harness, (publication) => {
 		for (const change of documentChanges(publication)) {
 			if (change.record.kind === "pi.live" && change.ops.length > 0) commits.push([...change.ops]);
 		}
@@ -261,7 +261,7 @@ describe("pi.live deltas", () => {
 		setup.faux.setResponses([fauxAssistantMessage([fauxText("word ".repeat(250))])]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		const commits: Op[][] = [];
-		harness.subscribeCommits((publication) => {
+		observeCommits(harness, (publication) => {
 			for (const change of documentChanges(publication)) {
 				if (change.record.kind === "pi.live" && change.ops.length > 0) commits.push([...change.ops]);
 			}
@@ -283,13 +283,14 @@ describe("pi.live deltas", () => {
 		class RecordingStorage extends MemoryStorage {
 			override async commit(
 				writes: Parameters<MemoryStorage["commit"]>[0],
-				context: Parameters<MemoryStorage["commit"]>[1],
+				adopt: Parameters<MemoryStorage["commit"]>[1],
+				context: Parameters<MemoryStorage["commit"]>[2],
 			) {
 				let kind: "base" | "delta" | undefined;
 				for (const write of writes) {
 					if (write.type === "document.change" && write.id === liveId) kind = write.content.kind;
 				}
-				const seq = await super.commit(writes, context);
+				const seq = await super.commit(writes, adopt, context);
 				if (kind !== undefined) written.set(seq, kind);
 				return seq;
 			}

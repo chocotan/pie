@@ -236,6 +236,7 @@ export {
 	type ModelRuntimeAuthOverrides,
 } from "./core/model-runtime.ts";
 export type {
+	PackageInstallFailure,
 	PackageManager,
 	PathMetadata,
 	ProgressCallback,
@@ -293,6 +294,7 @@ export {
 	type NewSessionOptions,
 	type ProjectedSessionEntry,
 	parseSessionEntries,
+	type ReadonlySessionManager,
 	type SessionContext,
 	type SessionEntry,
 	type SessionEntryBase,
@@ -301,7 +303,6 @@ export {
 	type SessionInfoEntry,
 	SessionManager,
 	type SessionMessageEntry,
-	type ReadonlySessionManager,
 	type SessionProjection,
 	type SessionTreeNode,
 	sessionEntryToContextMessages,

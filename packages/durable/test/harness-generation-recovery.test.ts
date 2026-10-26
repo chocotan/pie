@@ -287,6 +287,43 @@ describe("generation recovery", () => {
 		await opened.harness.close(context);
 	});
 
+	it("polls a checkpoint stored without a thinking level and records none", async () => {
+		const path = await sqlitePath();
+		const setup = chatSetup({ deferred: { pollAfterMs: 60_000 } });
+		let now = 1_000;
+		setup.now = () => now;
+		setup.faux.setResponses([fauxAssistantMessage("deferred answer")]);
+		let opened = await open(path, setup);
+		await opened.root.configure({ thinkingLevel: "high" }, context);
+		opened.harness.resume();
+		setup.settings.stream = { deferred: true };
+		const id = (await opened.root.submit({ type: "input", content: "hi" }, context)).id;
+		await waitFor(async () => {
+			const live = await opened.harness.snapshot(LiveDoc, opened.root.id, context);
+			return live?.generation?.deferred !== undefined;
+		});
+		const taskId = await runTaskId(opened.harness);
+		expect(await checkpoint(opened.harness, taskId)).toMatchObject({ phase: "poll", thinkingLevel: "high" });
+		await opened.harness.close(context);
+		// Earlier versions stored poll checkpoints without the field.
+		const database = new DatabaseSync(path);
+		database
+			.prepare("UPDATE tasks SET record = json_remove(record, '$.state.checkpoint.thinkingLevel') WHERE id = ?")
+			.run(taskId);
+		database.close();
+
+		opened = await open(path, setup);
+		expect(await checkpoint(opened.harness, taskId)).not.toHaveProperty("thinkingLevel");
+		now = 61_000;
+		opened.harness.resume();
+		const settled = await (await opened.harness.submission(id, context))!.wait(context);
+		if (settled.status !== "done" || settled.type !== "input") throw new Error(`Unexpected ${settled.status}`);
+		const answer = (await opened.root.commit((tx) => tx.entry(AssistantEntry, settled.answer), context))?.model?.[0];
+		expect(textOf(answer)).toBe("deferred answer");
+		expect(answer).not.toHaveProperty("thinkingLevel");
+		await opened.harness.close(context);
+	});
+
 	it("fails no_model when the pinned model is gone after reopen, in request and in poll", async () => {
 		const path = await sqlitePath();
 		const setup = chatSetup({ deferred: { pollAfterMs: 60_000 } });

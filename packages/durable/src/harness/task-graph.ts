@@ -1,18 +1,8 @@
-import { type AttachedReplicatedState, type Context, type JsonValue, replicatedState } from "@earendil-works/chord";
+import { type Context, type JsonValue, Watch, type WatchHandle } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withoutAbortSignal } from "@earendil-works/chord/context";
 import { applyImmutable, type Op } from "@earendil-works/chord/delta";
-import { CommittedStateSource, CommittedWatch } from "../session/observation.ts";
-import { contained, type SessionImpl } from "../session/session.ts";
-import type {
-	CommitPublication,
-	ConversationId,
-	JoinPolicy,
-	Storage,
-	TaskId,
-	TaskOutcome,
-	TaskRecord,
-	WatchHandle,
-} from "../types.ts";
+import { contained, type ObservedCommit, type SessionImpl } from "../session/session.ts";
+import type { ConversationId, JoinPolicy, Storage, TaskId, TaskOutcome, TaskRecord } from "../types.ts";
 import { type BlockedReason, type BlockedSubject, blockedSubject } from "./scheduler.ts";
 import { closedError, scanAll } from "./util.ts";
 
@@ -57,7 +47,7 @@ export type TaskGraph = {
 export type TaskGraphWatch = WatchHandle<TaskGraph>;
 
 type AnyTaskRecord = TaskRecord<JsonValue, JsonValue, JsonValue>;
-type Observer = CommittedStateSource<TaskGraph> | CommittedWatch<TaskGraph>;
+type Observer = Watch<TaskGraph>;
 type Mount = {
 	value: TaskGraph;
 	readonly observers: Set<Observer>;
@@ -90,7 +80,8 @@ export class TaskGraphView {
 		this.#storage = storage;
 		this.#blocking = blocking;
 		session.observeCommits((publication, context) => {
-			if (this.#mount === undefined) return;
+			// A commit held in memory changes documents only, which the graph does not show.
+			if (this.#mount === undefined || publication.kind === "memory") return;
 			advance(this.#mount, publication, context, blocking.blocked, (error) => session.report(error));
 		});
 		blocking.subscribeBlocked(() => this.#refreshBlocked());
@@ -98,7 +89,7 @@ export class TaskGraphView {
 			this.#closed = true;
 			for (const observer of [...(this.#mount?.observers ?? [])]) {
 				contained(
-					() => observer.closeSession(this.#session.failure),
+					() => observer.end(this.#session.failure),
 					(error) => session.report(error),
 				);
 			}
@@ -106,24 +97,10 @@ export class TaskGraphView {
 		});
 	}
 
-	/** A disposable read-only Chord state of the graph. */
-	async state(context: Context): Promise<AttachedReplicatedState<TaskGraph>> {
-		const { observer, detach } = await this.#attach(
-			(value, release) => new CommittedStateSource<TaskGraph>(value, release),
-			context,
-		);
-		try {
-			return replicatedState(observer, { onError: (error) => this.#session.report(error) });
-		} catch (error) {
-			detach();
-			throw error;
-		}
-	}
-
-	/** A serialized exact-frame watch of the graph; cancelling `context` stops it. */
+	/** A serialized watch of the graph; cancelling `context` stops it. */
 	async watch(context: Context): Promise<TaskGraphWatch> {
 		const { observer } = await this.#attach(
-			(value, release) => new CommittedWatch<TaskGraph>(value, release, (error) => this.#session.report(error)),
+			(value, release) => new Watch<TaskGraph>(value, release, (error) => this.#session.report(error)),
 			context,
 		);
 		const signal = context.abortSignal;
@@ -206,7 +183,7 @@ export class TaskGraphView {
  */
 function advance(
 	mount: Mount,
-	publication: CommitPublication,
+	publication: ObservedCommit,
 	context: Context,
 	blocked: TaskGraphBlocking["blocked"],
 	report: (error: unknown) => void,

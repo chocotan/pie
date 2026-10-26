@@ -132,6 +132,7 @@ const Unregistered = defineTask<NodeInput, { phase: "run" }, string>({
 });
 
 const TaskNotes = defineDoc<{ text: string }>({
+	checkpointWhen: () => false,
 	kind: "test.task-notes",
 	version: 1,
 	scope: "task",
@@ -1335,6 +1336,9 @@ describe("tool rounds", () => {
 			},
 		});
 		const setup = { ...base, models };
+		// The partial is stored at once, so the failed final commit leaves it for the reopened run to convert; held, it would
+		// be lost with the failed Session.
+		setup.settings.progress = { persistWithinMs: 0 };
 		addTask(setup.registry, Node);
 		let opened: Harness | undefined;
 		addHooks(setup.registry, GenerationTask, {
@@ -1354,7 +1358,8 @@ describe("tool rounds", () => {
 		class Failing extends ControlledStorage {
 			override async commit(
 				writes: Parameters<MemoryStorage["commit"]>[0],
-				ctx: Parameters<MemoryStorage["commit"]>[1],
+				adopt: Parameters<MemoryStorage["commit"]>[1],
+				ctx: Parameters<MemoryStorage["commit"]>[2],
 			) {
 				const finalizes = writes.some(
 					(write) => write.type === "task" && write.value.id === reject && write.value.state.status === "terminal",
@@ -1363,7 +1368,7 @@ describe("tool rounds", () => {
 					reject = undefined;
 					throw failure;
 				}
-				return super.commit(writes, ctx);
+				return super.commit(writes, adopt, ctx);
 			}
 		}
 		const storage = new Failing();
@@ -1631,7 +1636,8 @@ describe("conversation abort and boundaries", () => {
 		class Failing extends ControlledStorage {
 			override async commit(
 				writes: Parameters<MemoryStorage["commit"]>[0],
-				ctx: Parameters<MemoryStorage["commit"]>[1],
+				adopt: Parameters<MemoryStorage["commit"]>[1],
+				ctx: Parameters<MemoryStorage["commit"]>[2],
 			) {
 				const finalizes = writes.some(
 					(write) => write.type === "task" && write.value.id === reject && write.value.state.status === "terminal",
@@ -1640,7 +1646,7 @@ describe("conversation abort and boundaries", () => {
 					reject = undefined;
 					throw failure;
 				}
-				return super.commit(writes, ctx);
+				return super.commit(writes, adopt, ctx);
 			}
 		}
 		const storage = new Failing();

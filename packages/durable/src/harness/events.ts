@@ -1,17 +1,15 @@
-import type { Context, JsonValue } from "@earendil-works/chord";
+import { type Context, type JsonValue, NativeWatch, type WatchEnd } from "@earendil-works/chord";
 import type { Op, Path } from "@earendil-works/chord/delta";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
-import { CommittedWatch } from "../session/observation.ts";
+import type { ObservedCommit } from "../session/session.ts";
 import type {
 	CommitChange,
-	CommitPublication,
 	ConversationId,
 	EntryRecord,
 	JsonObject,
 	SubmissionId,
 	SubmissionRecord,
 	TaskId,
-	WatchEnd,
 } from "../types.ts";
 import { AgentDoc } from "./agent.ts";
 import type { InboxItem, InboxState } from "./inbox.ts";
@@ -169,7 +167,7 @@ export async function watchEvents(
 	context: Context,
 ): Promise<AgentEventStream> {
 	const views = conversationViews(harness);
-	let watch!: CommittedWatch<readonly AgentEvent[]>;
+	let watch!: NativeWatch<readonly AgentEvent[]>;
 	let snapshot!: SnapshotEvent;
 	await views.attach(
 		conversationId,
@@ -180,8 +178,9 @@ export async function watchEvents(
 			const held = new Set<TaskId>(completing.map((record) => record.id));
 			let current = initial;
 			snapshot = snapshotOf(initial);
-			// Batches are the watch's values; an overflow delivers a snapshot of the newest view instead.
-			watch = new CommittedWatch<readonly AgentEvent[]>(
+			// Batches are the watch's values, each delivered (folding would drop events); an overflow delivers a snapshot of
+			// the newest view instead.
+			watch = new NativeWatch<readonly AgentEvent[]>(
 				[],
 				release,
 				(error) => views.report(error),
@@ -191,9 +190,9 @@ export async function watchEvents(
 				publication: (before, after, ops, publication, commitContext) => {
 					current = after;
 					const events = translate(conversationId, before, after, ops, publication, held);
-					if (events.length > 0) watch.advance(events, [], commitContext);
+					if (events.length > 0) watch.advance(events, commitContext);
 				},
-				closeSession: (failure) => watch.closeSession(failure),
+				end: (failure) => watch.end(failure),
 			};
 		},
 		context,
@@ -207,7 +206,7 @@ export async function watchEvents(
 	if (signal !== undefined) watch.observeCancellation(signal);
 	return {
 		snapshot,
-		start: (listener) => watch.start((events, _ops, deliveryContext) => listener(events, deliveryContext)),
+		start: (listener) => watch.start(listener),
 		stop: () => watch.stop(),
 		closed: watch.closed,
 	};
@@ -229,7 +228,7 @@ function translate(
 	before: ConversationView,
 	after: ConversationView,
 	viewOps: readonly Op[],
-	publication: CommitPublication,
+	publication: ObservedCommit,
 	held: Set<TaskId>,
 ): AgentEvent[] {
 	const entries: EntryRecord[] = [];

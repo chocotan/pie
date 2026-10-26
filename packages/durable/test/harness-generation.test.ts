@@ -3,12 +3,12 @@ import {
 	fauxAssistantMessage,
 	type Message,
 	type Models,
+	PI_ATTRIBUTION,
 	type SimpleStreamOptions,
 	type SystemMessage,
 } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
-	type CommitPublication,
 	type Conversation,
 	createRegistry,
 	defineDoc,
@@ -30,7 +30,7 @@ import { resolveSettings } from "../src/harness/agent.ts";
 import type { SessionImpl } from "../src/session/session.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, unanswered, waitFor } from "./chat-support.ts";
 import { addSection } from "./harness-support.ts";
-import { ControlledStorage, context } from "./session-support.ts";
+import { ControlledStorage, context, observeCommits } from "./session-support.ts";
 
 const ERROR_503 = fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service Unavailable" });
 
@@ -75,7 +75,7 @@ function invalidFinalStream(): ReturnType<Models["streamSimple"]> {
 
 function livePublications(harness: Harness): LiveState[] {
 	const values: LiveState[] = [];
-	harness.subscribeCommits((publication: CommitPublication) => {
+	observeCommits(harness, (publication) => {
 		for (const change of publication.changes) {
 			if (change.type === "document" && change.record.kind === "pi.live" && change.value !== null) {
 				values.push(change.value as LiveState);
@@ -385,6 +385,43 @@ describe("generation", () => {
 		await harness.close(context);
 	});
 
+	it("records the requested thinking level on answers, streamed and polled", async () => {
+		const setup = chatSetup({ deferred: { pendingFetches: 1, pollAfterMs: 1 } });
+		setup.faux.setResponses([fauxAssistantMessage("streamed"), fauxAssistantMessage("polled")]);
+		const { harness, root } = await openChat(new MemoryStorage(), setup);
+		harness.resume();
+		const answer = async (content: string) => {
+			const settled = await (await root.submit({ type: "input", content }, context)).wait(context);
+			if (settled.status !== "done" || settled.type !== "input") throw new Error(`Unexpected ${settled.status}`);
+			return (await root.commit((tx) => tx.entry(AssistantEntry, settled.answer), context))?.model?.[0];
+		};
+		await root.configure({ thinkingLevel: "high" }, context);
+		expect(await answer("one")).toMatchObject({ thinkingLevel: "high" });
+		setup.settings.stream = { deferred: true };
+		expect(await answer("two")).toMatchObject({ thinkingLevel: "high" });
+		expect(setup.faux.state.deferredFetchCount).toBe(2);
+		await harness.close(context);
+	});
+
+	it("attributes model requests to pi by default and merges the Harness identity over it", async () => {
+		const seen: (SimpleStreamOptions["identity"] | undefined)[] = [];
+		const capture = (_context: unknown, options?: SimpleStreamOptions) => {
+			seen.push(options?.identity);
+			return fauxAssistantMessage("ok");
+		};
+		const acme = { name: "acme", url: "https://acme.example" };
+		for (const identity of [undefined, { userAgent: "short" as const, attribution: acme }]) {
+			const setup = chatSetup();
+			setup.identity = identity;
+			setup.faux.setResponses([capture]);
+			const { harness, root } = await openChat(new MemoryStorage(), setup);
+			harness.resume();
+			await (await root.submit({ type: "input", content: "hi" }, context)).wait(context);
+			await harness.close(context);
+		}
+		expect(seen).toEqual([{ attribution: PI_ATTRIBUTION }, { attribution: acme, userAgent: "short" }]);
+	});
+
 	// Regression coverage for #10424.
 	it("keeps provider session IDs request-local across concurrent conversations", async () => {
 		const setup = chatSetup();
@@ -489,7 +526,7 @@ describe("generation", () => {
 			stream: {},
 			retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxAgentDelayMs: 60000 },
 			compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000, backgroundTokens: 32768 },
-			progress: { partialIntervalMs: 100, outputIntervalMs: 100 },
+			progress: { partialIntervalMs: 100, outputIntervalMs: 100, persistWithinMs: 1000 },
 			toolExecution: "parallel",
 			steeringMode: "one-at-a-time",
 			followUpMode: "one-at-a-time",
@@ -507,7 +544,11 @@ describe("generation", () => {
 		expect(resolveSettings({ progress: { outputIntervalMs: 500 } }).progress).toEqual({
 			partialIntervalMs: 100,
 			outputIntervalMs: 500,
+			persistWithinMs: 1000,
 		});
+		// Not a number of milliseconds, 0 or more: the default.
+		expect(resolveSettings({ progress: { persistWithinMs: -1 } }).progress.persistWithinMs).toBe(1000);
+		expect(resolveSettings({ progress: { persistWithinMs: 0 } }).progress.persistWithinMs).toBe(0);
 	});
 
 	it("commits partials no more often than progress.partialIntervalMs", async () => {
@@ -539,6 +580,7 @@ describe("generation", () => {
 
 	it("renders sections that read conversation documents through input.read", async () => {
 		const Agent = defineDoc<{ cwd: string; kind: string }>({
+			checkpointWhen: () => false,
 			kind: "test.agent",
 			version: 1,
 			scope: "conversation",

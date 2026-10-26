@@ -1,6 +1,6 @@
-import { type Context, type JsonValue, replicatedState } from "@earendil-works/chord";
+import { type Context, type JsonValue, Watch } from "@earendil-works/chord";
 import { awaitWithContext, BACKGROUND_CONTEXT, withoutAbortSignal } from "@earendil-works/chord/context";
-import { type Op, track } from "@earendil-works/chord/delta";
+import { type Op, PendingOps, track } from "@earendil-works/chord/delta";
 import {
 	type AnyDocToken,
 	addressId,
@@ -9,11 +9,13 @@ import {
 	materializeDocument,
 	resolveAddress,
 } from "../documents.ts";
-import { SessionFailed, StorageRequestError } from "../errors.ts";
+import { ReadOnlySession, SessionFailed, StorageRequestError } from "../errors.ts";
 import { idFromNumber } from "../ids.ts";
 import { hostTimers, type Timers } from "../timers.ts";
 import type {
 	CommitChange,
+	CommitOptions,
+	CommitPersistence,
 	CommitPublication,
 	ConversationDocFamilyToken,
 	ConversationDocToken,
@@ -27,7 +29,6 @@ import type {
 	DocumentPoint,
 	DocumentQuery,
 	DocumentRecord,
-	DocumentState,
 	DocumentWatch,
 	EntryId,
 	EntryQuery,
@@ -58,12 +59,40 @@ import type {
 	Tx,
 } from "../types.ts";
 import {
-	CommittedStateSource,
-	CommittedWatch,
-	type ObservedDocumentValue,
-	RETIREMENT_OPERATIONS,
-} from "./observation.ts";
-import { type LoadedDocument, Transaction, type TransactionHost, type TransactionScope } from "./transaction.ts";
+	type AdoptedDocuments,
+	type HeldDocument,
+	type LoadedDocument,
+	storeHeld,
+	Transaction,
+	type TransactionHost,
+	type TransactionScope,
+} from "./transaction.ts";
+
+/** What a document watch observes: the committed value of its incarnation, `null` once it retired. */
+type ObservedDocumentValue = Readonly<JsonObject> | null;
+
+/**
+ * What the Session's own components observe of one commit (`observeCommits()`): a stored commit with its own changes, or
+ * a deferred one adopted in memory only (`CommitPersistence`), which changes documents only. Memory is never behind:
+ * a later store of held changes is not observed again.
+ */
+export type ObservedCommit =
+	| { readonly kind: "stored"; readonly seq: Seq; readonly changes: readonly CommitChange[] }
+	| { readonly kind: "memory"; readonly changes: readonly DocumentCommitChange[] };
+
+/** A held document (`HeldDocument`) as the Session keeps it: pinned in the cache until stored. */
+type Hold = HeldDocument & {
+	/** When the earliest of its held commits must be stored, on the Session clock. */
+	deadline: number;
+	readonly unpin: () => void;
+};
+
+/** The armed store of held documents: a foreground timer for the earliest deadline, `fired` once its job is queued. */
+type HoldTimer = { readonly at: number; disarm: () => void; fired: boolean };
+
+const NO_HOLDS: readonly Hold[] = [];
+
+const NO_OPERATIONS: readonly Op[] = [];
 
 /** The default source of a report: a listener, which never fails what ran it. */
 const LISTENER: ReportInfo = { type: "listener_error" };
@@ -75,14 +104,23 @@ const LISTENER: ReportInfo = { type: "listener_error" };
  */
 export function createSession(
 	storage: Storage,
-	options?: { readonly now?: () => number; readonly documentRetentionMs?: number; readonly setTimer?: SetTimer },
+	options?: {
+		readonly now?: () => number;
+		readonly documentRetentionMs?: number;
+		readonly setTimer?: SetTimer;
+		/** Default `withinMs` of a deferred commit (`CommitPersistence`); default 1,000. */
+		readonly persistWithinMs?: number;
+	},
 ): Session {
 	const retention = options?.documentRetentionMs;
+	const within = options?.persistWithinMs;
 	return new SessionImpl(
 		storage,
 		options?.now,
 		retention === undefined ? undefined : () => retention,
 		options?.setTimer,
+		false,
+		() => within,
 	);
 }
 
@@ -102,15 +140,29 @@ export function documentRetention(ms: number | undefined): number {
 	return typeof ms === "number" && ms >= 0 ? ms : defaultRetention;
 }
 
+/** Default `withinMs` of a deferred commit, `settings.progress.persistWithinMs`. */
+const DEFAULT_PERSIST_WITHIN_MS = 1_000;
+
+/**
+ * A deferred commit's default window as given, when it is a number of milliseconds, `0` or more (`Infinity` waits for a
+ * reading or writing commit or close); otherwise the default.
+ */
+export function persistWithin(ms: number | undefined): number {
+	return typeof ms === "number" && ms >= 0 ? ms : DEFAULT_PERSIST_WITHIN_MS;
+}
+
 /**
  * Session kernel: one mutation line, the loaded document tracker cache, and committed publication.
  *
- * The cache is bounded by use: a document with no watch or document state attached leaves it once it was not read or
+ * The cache is bounded by use: a document with no watch attached leaves it once it was not read or
  * written for the retention period, and the next access loads it from Storage. Eviction runs as a job on the mutation
  * line, so no transaction ever holds a tracker that leaves.
  *
- * Only committed state is observable. Every commit callback, preparation, Storage settlement, adoption, and
- * publication enqueue runs while the line is held; listeners run later.
+ * Only committed state is observable. A deferred commit (`CommitPersistence`) is committed in memory first: it is
+ * adopted and shown to the Session's own observers, and its changes wait, folded per document and pinned in the cache, for
+ * the first commit that reads or writes the document, the document's deadline, a drop of its tracker, or close, which
+ * store them. Every commit callback, preparation, Storage settlement, adoption, and publication enqueue runs while the
+ * line is held; listeners run later.
  *
  * Storage failures are final. Every Storage call goes through one guard: the first error a Storage method throws, other
  * than for a cancelled caller, fails the Session, as does a commit it cannot adopt. That call gets the error; every later
@@ -127,6 +179,12 @@ export class SessionImpl implements Session {
 	readonly #attachedDocuments = new Map<DocumentId, number>();
 	readonly #clock: () => number;
 	readonly #documentRetentionMs: () => number;
+	readonly #persistWithinMs: () => number;
+	/** Documents with held changes, by incarnation (record ID); each is pinned in the cache until they are stored. */
+	readonly #holds = new Map<DocumentId, Hold>();
+	#holdTimer: HoldTimer | undefined;
+	/** Refuse every commit with writes (`HarnessOptions.readOnly`). */
+	readonly #readOnly: boolean;
 	readonly #timers: Timers;
 	/** The pending eviction: a timer for the oldest idle document, or a line job when the retention is 0. */
 	#documentSweep: { readonly at: number; disarm: (() => void) | undefined } | undefined;
@@ -135,7 +193,7 @@ export class SessionImpl implements Session {
 	#documentTimersUnavailable = false;
 	readonly #commitListeners = new Set<(publication: CommitPublication, context: Context) => void>();
 	/** The Session's own listeners, such as its scheduler's: they keep memory in step with storage, so a throw fails it. */
-	readonly #internalListeners = new Set<(publication: CommitPublication, context: Context) => void>();
+	readonly #internalListeners = new Set<(publication: ObservedCommit, context: Context) => void>();
 	readonly #closeListeners = new Set<() => void>();
 	readonly #host: TransactionHost;
 	#tail: Promise<void> = Promise.resolve();
@@ -164,9 +222,12 @@ export class SessionImpl implements Session {
 		now: () => number = Date.now,
 		documentRetentionMs: () => number | undefined = () => undefined,
 		setTimer?: SetTimer,
+		readOnly = false,
+		persistWithinMs: () => number | undefined = () => undefined,
 	) {
 		// Waits race it; none has to.
 		this.#failed.promise.catch(() => {});
+		this.#readOnly = readOnly;
 		this.#storage = new GuardedStorage(storage, this);
 		this.#timers = hostTimers(setTimer, (error) => this.report(error, { type: "host_error", callback: "setTimer" }));
 		// Cache bookkeeping must never change the outcome of the operation it follows: a clock or a retention setting
@@ -183,6 +244,13 @@ export class SessionImpl implements Session {
 				return documentRetention(documentRetentionMs());
 			} catch {
 				return documentRetention(undefined);
+			}
+		};
+		this.#persistWithinMs = () => {
+			try {
+				return persistWithin(persistWithinMs());
+			} catch {
+				return persistWithin(undefined);
 			}
 		};
 		this.#host = {
@@ -210,8 +278,8 @@ export class SessionImpl implements Session {
 		return this.#storage;
 	}
 
-	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T> {
-		return this.commitWith(change, context);
+	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context, options?: CommitOptions): Promise<T> {
+		return this.commitWith(change, context, undefined, options);
 	}
 
 	/**
@@ -219,14 +287,14 @@ export class SessionImpl implements Session {
 	 * now; they read the error from `failure`. The Storage guard calls this; the Harness also calls it for a throw in its
 	 * scheduler's own commits.
 	 */
-	fail(error: unknown): void {
+	fail(error: unknown, context?: Context): void {
 		if (this.#failure !== undefined) return;
 		this.#failure = { error };
 		this.#failed.reject(new SessionFailed(error));
 		// Seal first, so a report handler that calls back finds the Session failed. Closing runs the close listeners
 		// synchronously; a failing backend close is the caller's to see, and here nobody waits.
 		this.close(BACKGROUND_CONTEXT).catch(() => {});
-		this.report(error, { type: "session_failed" });
+		this.report(error, { type: "session_failed" }, context);
 	}
 
 	/**
@@ -234,13 +302,32 @@ export class SessionImpl implements Session {
 	 * bootstrap and task replacement. `scope` sets the default `tx.createTask()` conversation and the task attributed to
 	 * appended entries.
 	 */
-	commitWith<T>(change: (tx: Transaction) => T | Promise<T>, context: Context, scope?: TransactionScope): Promise<T> {
+	commitWith<T>(
+		change: (tx: Transaction) => T | Promise<T>,
+		context: Context,
+		scope?: TransactionScope,
+		options?: CommitOptions,
+	): Promise<T> {
+		let withinMs: number | undefined;
 		try {
 			this.assertUsable();
+			withinMs = this.#deferral(options?.persistence);
 		} catch (error) {
 			return Promise.reject(error);
 		}
-		return this.#enqueue(() => this.#runCommit(change, context, scope));
+		return this.#enqueue(() => this.#runCommit(change, context, scope, withinMs));
+	}
+
+	/** How long a commit may stay in memory before it is stored; `undefined` when it is immediate. */
+	#deferral(persistence: CommitPersistence | undefined): number | undefined {
+		if (persistence?.kind !== "deferred") return undefined;
+		const ms = persistence.withinMs;
+		if (ms === undefined) return this.#persistWithinMs();
+		// Public options: checked here, as the types cannot.
+		if (typeof ms !== "number" || !(ms >= 0)) {
+			throw new TypeError("CommitPersistence.withinMs must be a number of milliseconds, 0 or more");
+		}
+		return ms;
 	}
 
 	/** Internal: run a read-only job on the mutation line so multi-read derivations observe one committed state. */
@@ -322,64 +409,6 @@ export class SessionImpl implements Session {
 		return loaded.tracker.value;
 	}
 
-	documentState<T extends JsonObject>(
-		token: SessionDocToken<T>,
-		context: Context,
-	): Promise<DocumentState<T> | undefined>;
-	documentState<T extends JsonObject>(
-		token: ConversationDocToken<T>,
-		conversationId: ConversationId,
-		context: Context,
-	): Promise<DocumentState<T> | undefined>;
-	documentState<T extends JsonObject>(
-		token: TaskDocToken<T>,
-		taskId: TaskId,
-		context: Context,
-	): Promise<DocumentState<T> | undefined>;
-	documentState<T extends JsonObject, I extends JsonValue>(
-		token: SessionDocFamilyToken<T, I>,
-		key: string,
-		context: Context,
-	): Promise<DocumentState<T> | undefined>;
-	documentState<T extends JsonObject, I extends JsonValue>(
-		token: ConversationDocFamilyToken<T, I>,
-		conversationId: ConversationId,
-		key: string,
-		context: Context,
-	): Promise<DocumentState<T> | undefined>;
-	documentState<T extends JsonObject, I extends JsonValue>(
-		token: TaskDocFamilyToken<T, I>,
-		taskId: TaskId,
-		key: string,
-		context: Context,
-	): Promise<DocumentState<T> | undefined>;
-	documentState(token: AnyDocToken, ...args: readonly unknown[]): Promise<DocumentState<JsonObject> | undefined> {
-		try {
-			this.assertUsable();
-			const definition = token.definition;
-			const resolved = resolveAddress(definition, args);
-			const context = args[resolved.nextArgument] as Context;
-			return this.#enqueue(async () => {
-				this.#assertHealthy();
-				const loaded = await this.#loadDocument(definition, resolved.id, resolved.address, context);
-				if (loaded === undefined) return undefined;
-				const { observer: source, detach } = this.#attachDocument(
-					definition,
-					loaded,
-					(value, release) => new CommittedStateSource<ObservedDocumentValue>(value, release),
-				);
-				try {
-					return replicatedState(source, { onError: (error) => this.report(error) }) as DocumentState<JsonObject>;
-				} catch (error) {
-					detach();
-					throw error;
-				}
-			});
-		} catch (error) {
-			return Promise.reject(error);
-		}
-	}
-
 	watchDoc<T extends JsonObject>(token: SessionDocToken<T>, context: Context): Promise<DocumentWatch<T> | undefined>;
 	watchDoc<T extends JsonObject>(
 		token: ConversationDocToken<T>,
@@ -426,12 +455,7 @@ export class SessionImpl implements Session {
 				const loaded = await this.#loadDocument(definition, resolved.id, resolved.address, context);
 				if (cancelled) throw cancellationError(signal!);
 				if (loaded === undefined) return undefined;
-				return this.#attachDocument(
-					definition,
-					loaded,
-					(value, release) =>
-						new CommittedWatch<ObservedDocumentValue>(value, release, (error) => this.report(error)),
-				).observer;
+				return this.#attachDocument(definition, loaded);
 			});
 			if (watch === undefined) return undefined;
 			if (cancelled) {
@@ -500,11 +524,21 @@ export class SessionImpl implements Session {
 				.then(() => this.beforeClose())
 				.then(() =>
 					this.#enqueue(async () => {
+						// Last, after the writes at close (`writeAtClose()`), while the trackers are still here. A failed Session
+						// writes nothing; a failing store fails it, and the backend still closes.
+						let unstored: { readonly error: unknown } | undefined;
+						// Only with something to store: otherwise the backend's close begins in this very job.
+						if (this.#failure === undefined && this.#holds.size > 0) {
+							await this.#storeHolds([...this.#holds.values()], cleanup).catch((error: unknown) => {
+								unstored = { error };
+							});
+						}
 						this.#commitListeners.clear();
 						this.#internalListeners.clear();
 						this.#documents.clear();
 						this.#idleDocuments.clear();
 						this.#attachedDocuments.clear();
+						this.#holds.clear();
 						try {
 							await this.#storage.close(cleanup);
 						} catch (error) {
@@ -515,6 +549,7 @@ export class SessionImpl implements Session {
 							}
 							throw error;
 						}
+						if (unstored !== undefined) throw unstored.error;
 					}),
 				)
 				.finally(() => {
@@ -532,6 +567,8 @@ export class SessionImpl implements Session {
 	#notifyClose(): void {
 		this.#documentSweep?.disarm?.();
 		this.#documentSweep = undefined;
+		this.#holdTimer?.disarm();
+		this.#holdTimer = undefined;
 		const listeners = [...this.#closeListeners];
 		this.#closeListeners.clear();
 		for (const listener of listeners) contained(listener, (error) => this.report(error));
@@ -541,7 +578,7 @@ export class SessionImpl implements Session {
 	 * Internal: the Session's failure, and errors of listeners, which never fail what ran them; `info` defaults to a
 	 * listener. A plain Session drops them.
 	 */
-	report(_error: unknown, _info: ReportInfo = LISTENER): void {}
+	report(_error: unknown, _info: ReportInfo = LISTENER, _context?: Context): void {}
 
 	/**
 	 * Runs inside every transaction that creates or forks a conversation, after the conversation record is staged. A
@@ -560,7 +597,7 @@ export class SessionImpl implements Session {
 		return this.#enqueue(async () => {
 			if (this.#failure !== undefined) return;
 			const batch = writes();
-			if (batch.length > 0) await this.#storage.commit(batch, BACKGROUND_CONTEXT);
+			if (batch.length > 0) await this.#storage.commit(batch, () => {}, BACKGROUND_CONTEXT);
 		});
 	}
 
@@ -569,7 +606,10 @@ export class SessionImpl implements Session {
 		return Promise.resolve();
 	}
 
-	/** Register a synchronous post-adoption listener. It must not block or call Session operations; a throw is reported. */
+	/**
+	 * Register a synchronous listener for every stored commit, with exactly what it stored (`CommitPublication`). It must
+	 * not block or call Session operations; a throw is reported.
+	 */
 	subscribeCommits(listener: (publication: CommitPublication, context: Context) => void): () => void {
 		this.assertUsable();
 		this.#commitListeners.add(listener);
@@ -577,10 +617,11 @@ export class SessionImpl implements Session {
 	}
 
 	/**
-	 * Internal: `subscribeCommits()` for the Session's own components, whose state follows each commit. A throw leaves
-	 * that state behind storage, so it fails the Session instead of being reported. They run before host listeners.
+	 * Internal: observe every commit as memory adopts it (`ObservedCommit`), for the Session's own components, whose state
+	 * follows memory. A throw leaves that state behind, so it fails the Session instead of being reported. They run
+	 * before host listeners.
 	 */
-	observeCommits(listener: (publication: CommitPublication, context: Context) => void): () => void {
+	observeCommits(listener: (publication: ObservedCommit, context: Context) => void): () => void {
 		this.assertUsable();
 		this.#internalListeners.add(listener);
 		return () => this.#internalListeners.delete(listener);
@@ -596,29 +637,32 @@ export class SessionImpl implements Session {
 		return () => this.#closeListeners.delete(listener);
 	}
 
-	/** Drop every loaded tracker on the mutation line; later access cold-loads from Storage. */
+	/** Drop every loaded tracker on the mutation line, held changes stored first; later access cold-loads from Storage. */
 	unloadDocuments(): Promise<void> {
 		return this.#enqueue(async () => {
+			if (this.#failure === undefined) await this.#storeHolds([...this.#holds.values()], BACKGROUND_CONTEXT);
 			this.#documents.clear();
 			this.#idleDocuments.clear();
 		});
 	}
 
 	/**
-	 * Internal, for tests: how many documents the cache holds, how many are idle, how many incarnations are pinned, and how
-	 * many sweep jobs were queued on the line so far.
+	 * Internal, for tests: how many documents the cache holds, how many are idle, how many incarnations are pinned, how
+	 * many sweep jobs were queued on the line so far, and how many documents have held changes.
 	 */
 	get documentCacheSizes(): {
 		readonly cached: number;
 		readonly idle: number;
 		readonly attached: number;
 		readonly sweeps: number;
+		readonly held: number;
 	} {
 		return {
 			cached: this.#documents.size,
 			idle: this.#idleDocuments.size,
 			attached: this.#attachedDocuments.size,
 			sweeps: this.#sweepJobs,
+			held: this.#holds.size,
 		};
 	}
 
@@ -716,7 +760,8 @@ export class SessionImpl implements Session {
 	async #runCommit<T>(
 		change: (tx: Transaction) => T | Promise<T>,
 		context: Context,
-		scope?: TransactionScope,
+		scope: TransactionScope | undefined,
+		withinMs: number | undefined,
 	): Promise<T> {
 		this.#assertHealthy();
 		context.abortSignal?.throwIfAborted();
@@ -744,72 +789,227 @@ export class SessionImpl implements Session {
 			this.#sweepDocuments();
 			return result;
 		}
+		if (this.#readOnly) {
+			// Refused before Storage: the Session stays healthy, and the caller sees why.
+			tx.discard();
+			this.#sweepDocuments();
+			throw new ReadOnlySession("a commit with writes");
+		}
+		if (withinMs !== undefined) {
+			const held = tx.holdable();
+			if (held !== undefined) {
+				this.#hold(tx, held, withinMs, context);
+				this.#sweepDocuments();
+				return result;
+			}
+		}
+		// The last step before Storage: held changes leave their queue only once nothing but Storage can fail.
+		const taken = this.#holds.size === 0 ? NO_HOLDS : tx.takeHeld((id) => this.#holds.get(id));
+		// Storage adopts the batch synchronously once it is durable, before its next commit; a throw here would reach
+		// Storage, so the callback keeps its own error.
+		let adoption: { readonly documents: AdoptedDocuments } | { readonly error: unknown } | undefined;
+		const adopt = (committed: Seq): void => {
+			try {
+				adoption = { documents: tx.adopt(committed) };
+			} catch (error) {
+				adoption = { error };
+			}
+		};
 		let seq: Seq;
 		try {
 			// Once admitted, caller cancellation does not interrupt Storage settlement.
-			seq = await this.#storage.commit(writes, withoutAbortSignal(context));
+			seq = await this.#storage.commit(writes, adopt, withoutAbortSignal(context));
 		} catch (error) {
-			// The guard has failed the Session.
-			tx.discard();
+			// The guard has failed the Session. A rejection after adoption leaves nothing staged to discard.
+			if (adoption === undefined) tx.discard();
 			throw error;
 		}
-		let documents: DocumentCommitChange[];
-		try {
-			documents = tx.adopt(seq);
-		} catch (error) {
-			// Storage already committed; a failed adoption leaves memory behind durable state.
+		if (adoption === undefined) {
+			const error = new Error("Storage committed without adopting the batch");
 			this.fail(error);
 			throw error;
 		}
-		for (const document of documents) this.#touchDocument(addressId(document.record));
+		if ("error" in adoption) {
+			// Storage already committed; a failed adoption leaves memory behind durable state.
+			this.fail(adoption.error);
+			throw adoption.error;
+		}
+		const documents = adoption.documents;
+		if (taken.length > 0) this.#release(taken);
+		for (const document of documents.stored) this.#touchDocument(addressId(document.record));
 		this.#publish(seq, writes, documents, context);
 		this.#sweepDocuments();
 		return result;
 	}
 
-	#publish(
-		seq: Seq,
-		writes: readonly StorageWrite[],
-		documents: readonly DocumentCommitChange[],
+	/**
+	 * Hold a deferred commit (`Transaction.holdable()`): adopt it in memory, queue its changes per document, pinned, by
+	 * the earliest deadline of the document's held commits, and show it to the Session's own observers.
+	 */
+	#hold(
+		tx: Transaction,
+		held: NonNullable<ReturnType<Transaction["holdable"]>>,
+		withinMs: number,
 		context: Context,
 	): void {
-		if (this.#commitListeners.size === 0 && this.#internalListeners.size === 0) return;
-		const changes: CommitChange[] = [];
-		for (const write of writes) {
-			switch (write.type) {
-				case "conversation":
-				case "entry":
-				case "task":
-				case "submission":
-					changes.push(write);
+		const documents = tx.adoptHeld();
+		const deadline = this.#clock() + withinMs;
+		for (const { loaded, ops, base } of held) {
+			const id = loaded.record.id;
+			let hold = this.#holds.get(id);
+			if (hold === undefined) {
+				const unpin = this.#pinDocument(loaded.addressId, id);
+				hold = { loaded, pending: new PendingOps(), base: false, deadline, unpin };
+				this.#holds.set(id, hold);
 			}
+			hold.pending.push(ops);
+			if (base) hold.base = true;
+			if (deadline < hold.deadline) hold.deadline = deadline;
 		}
-		for (const document of documents) changes.push(document);
-		const publication: CommitPublication = { seq, changes };
-		// The commit is durable: a failing listener neither fails the commit nor skips the others.
+		this.#armHoldTimer();
+		const publication: ObservedCommit = { kind: "memory", changes: documents };
 		for (const listener of [...this.#internalListeners]) {
 			contained(
 				() => listener(publication, context),
-				(error) => this.fail(error),
-			);
-		}
-		for (const listener of [...this.#commitListeners]) {
-			contained(
-				() => listener(publication, context),
-				(error) => this.report(error),
+				(error) => this.fail(error, context),
 			);
 		}
 	}
 
 	/**
-	 * Attach an observer to one committed incarnation: check the definition, then forward this incarnation's committed
-	 * changes and close. `detach` removes both subscriptions.
+	 * Store the held changes of `holds` in one storage transaction, on the line. Memory already has them, so only
+	 * `subscribeCommits()` listeners see it. A failure fails the Session, as every Storage failure does.
 	 */
-	#attachDocument<O extends CommittedStateSource | CommittedWatch>(
-		definition: AnyDocToken["definition"],
-		loaded: LoadedDocument,
-		create: (value: JsonObject, detach: () => void) => O,
-	): { observer: O; detach: () => void } {
+	async #storeHolds(holds: readonly Hold[], context: Context): Promise<void> {
+		if (holds.length === 0) return;
+		const writes: Extract<StorageWrite, { readonly type: "document.change" }>[] = [];
+		const changes: DocumentCommitChange[] = [];
+		for (const hold of holds) {
+			const { record, tracker, valueVersion: version } = hold.loaded;
+			const value = tracker.value;
+			const stored = storeHeld(hold, NO_OPERATIONS, value, version);
+			writes.push({ type: "document.change", id: record.id, content: stored.content });
+			// Held documents are conversation documents.
+			const conversationId = record.scope.kind === "conversation" ? record.scope.conversationId : undefined;
+			changes.push({ type: "document", record, conversationId, version, value, ops: stored.ops });
+		}
+		let adopted = false;
+		const adopt = (): void => {
+			adopted = true;
+			for (const [index, hold] of holds.entries()) {
+				if (writes[index]!.content.kind === "base") hold.loaded.deltasSinceBase = 0;
+				else hold.loaded.deltasSinceBase++;
+			}
+		};
+		const seq = await this.#storage.commit(writes, adopt, withoutAbortSignal(context));
+		if (!adopted) {
+			const error = new Error("Storage committed without adopting the batch");
+			this.fail(error);
+			throw error;
+		}
+		this.#release(holds);
+		const publication: CommitPublication = { seq, changes };
+		for (const listener of [...this.#commitListeners]) {
+			contained(
+				() => listener(publication, context),
+				(error) => this.report(error, LISTENER, context),
+			);
+		}
+	}
+
+	/** After their store: forget `holds`, unpin their documents, and move the timer to the next deadline. */
+	#release(holds: readonly Hold[]): void {
+		for (const hold of holds) {
+			this.#holds.delete(hold.loaded.record.id);
+			hold.unpin();
+		}
+		this.#armHoldTimer();
+	}
+
+	/**
+	 * Keep a foreground timer (Workers refuse background ones) for the earliest deadline of the held documents. When it
+	 * fires, every held document is stored, in one storage transaction: a deadline is the latest time, and the others
+	 * cost little more in the same transaction. Once fired, it stays until its job ran.
+	 */
+	#armHoldTimer(): void {
+		if (this.#closing !== undefined) return;
+		let at = Infinity;
+		for (const hold of this.#holds.values()) if (hold.deadline < at) at = hold.deadline;
+		const armed = this.#holdTimer;
+		if (armed !== undefined && (armed.fired || armed.at === at)) return;
+		armed?.disarm();
+		this.#holdTimer = undefined;
+		if (at === Infinity) return;
+		const timer: HoldTimer = { at, disarm: () => {}, fired: false };
+		const run = (): void => {
+			timer.fired = true;
+			this.#enqueue(async () => {
+				if (this.#holdTimer === timer) this.#holdTimer = undefined;
+				// Close stores what is held itself.
+				if (this.#closing !== undefined || this.#failure !== undefined) return;
+				await this.#storeHolds([...this.#holds.values()], BACKGROUND_CONTEXT);
+			}).catch(() => {});
+		};
+		this.#holdTimer = timer;
+		timer.disarm = this.#timers.foreground(run, Math.max(0, at - this.#clock()));
+	}
+
+	#publish(seq: Seq, writes: readonly StorageWrite[], documents: AdoptedDocuments, context: Context): void {
+		const changes: CommitChange[] | undefined =
+			this.#commitListeners.size > 0 || this.#internalListeners.size > 0 ? [] : undefined;
+		for (const write of writes) {
+			switch (write.type) {
+				case "entry":
+					context.telemetry.addEvent("pi.durable.entry", {
+						"entry.id": write.value.id,
+						"entry.kind": write.value.kind,
+					});
+					changes?.push(write);
+					break;
+				case "submission":
+					if (write.value.status === "done" || write.value.status === "unanswered") {
+						context.telemetry.addEvent("pi.durable.submission", {
+							"submission.id": write.value.id,
+							status: write.value.status,
+							"answer.entry_id": write.value.answer,
+						});
+					}
+					changes?.push(write);
+					break;
+				case "conversation":
+				case "task":
+					changes?.push(write);
+			}
+		}
+		if (changes === undefined) return;
+		const tables = changes.length;
+		for (const document of documents.observed) changes.push(document);
+		const observed: ObservedCommit = { kind: "stored", seq, changes };
+		// One publication for both, unless the commit also stored held changes, which only durable listeners get.
+		const stored: CommitPublication =
+			documents.stored === documents.observed
+				? observed
+				: { seq, changes: [...changes.slice(0, tables), ...documents.stored] };
+		// The commit is durable: a failing listener neither fails the commit nor skips the others.
+		for (const listener of [...this.#internalListeners]) {
+			contained(
+				() => listener(observed, context),
+				(error) => this.fail(error, context),
+			);
+		}
+		for (const listener of [...this.#commitListeners]) {
+			contained(
+				() => listener(stored, context),
+				(error) => this.report(error, LISTENER, context),
+			);
+		}
+	}
+
+	/**
+	 * Attach a watch to one committed incarnation: check the definition, then forward this incarnation's committed
+	 * changes, its retirement, and close. The watch's detach removes both subscriptions.
+	 */
+	#attachDocument(definition: AnyDocToken["definition"], loaded: LoadedDocument): Watch<ObservedDocumentValue> {
 		checkRecordScope(definition, loaded.record);
 		checkRecordVersion(definition, loaded.record, loaded.storedVersion);
 		let unsubscribeCommit = (): void => {};
@@ -821,29 +1021,25 @@ export class SessionImpl implements Session {
 			unsubscribeClose();
 			unpin();
 		};
-		let observer: O;
-		try {
-			observer = create(loaded.tracker.value, detach);
-		} catch (error) {
-			unpin();
-			throw error;
-		}
+		const observer = new Watch<ObservedDocumentValue>(loaded.tracker.value, detach, (error) => this.report(error));
 		const observed = { version: loaded.valueVersion };
 		unsubscribeCommit = this.observeCommits((publication, context) => {
 			for (const change of publication.changes) {
 				if (change.type !== "document" || change.record.id !== loaded.record.id) continue;
-				// A document state's frames carry no caller cancellation; a watch observes its own cancellation.
-				const frameContext = observer instanceof CommittedStateSource ? withoutAbortSignal(context) : context;
+				if (change.value === null) {
+					// A retired incarnation never changes again: its watch delivers the retirement but pins nothing.
+					unpin();
+					observer.retire(context);
+					continue;
+				}
 				const ops = observedOperations(observed, change);
 				// A migration-only base changes nothing for an observer of the new version.
 				if (ops.length === 0) continue;
-				// A retired incarnation never changes again: its observers keep their last value but pin nothing.
-				if (change.value === null) unpin();
-				observer.advance(change.value, ops, frameContext);
+				observer.advance(change.value, ops, context);
 			}
 		});
-		unsubscribeClose = this.subscribeClose(() => observer.closeSession(this.#failure));
-		return { observer, detach };
+		unsubscribeClose = this.subscribeClose(() => observer.end(this.#failure));
+		return observer;
 	}
 
 	async #loadDocument(
@@ -858,7 +1054,12 @@ export class SessionImpl implements Session {
 			this.#touchDocument(addressId);
 			return cached;
 		}
-		if (cached !== undefined) this.#dropDocument(addressId);
+		if (cached !== undefined) {
+			// The reload must find what memory holds: held changes are stored before their tracker goes.
+			const hold = this.#holds.get(cached.record.id);
+			if (hold !== undefined) await this.#storeHolds([hold], context);
+			this.#dropDocument(addressId);
+		}
 		const record = await this.#storage.findDocument(address, "current", context);
 		if (record === undefined) return undefined;
 		const stored = await this.#storage.document(record.id, "current", context);
@@ -919,7 +1120,6 @@ function observedOperations(
 	observed: { version: number },
 	change: Extract<DocumentCommitChange, { readonly type: "document" }>,
 ): readonly Op[] {
-	if (change.value === null) return RETIREMENT_OPERATIONS;
 	if (change.version === observed.version) return change.ops;
 	observed.version = change.version!;
 	return [["r", change.value]];
@@ -955,8 +1155,8 @@ class GuardedStorage implements Storage {
 	}
 
 	/** Never exempt, whatever it throws: once admitted, whether a failed batch committed is unknown. */
-	commit(writes: readonly StorageWrite[], context: Context): Promise<Seq> {
-		return this.#call(undefined, () => this.#storage.commit(writes, context));
+	commit(writes: readonly StorageWrite[], adopt: (seq: Seq) => void, context: Context): Promise<Seq> {
+		return this.#call(undefined, () => this.#storage.commit(writes, adopt, context));
 	}
 
 	mintId<I extends Id<string>>(): Promise<I> {

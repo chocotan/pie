@@ -16,21 +16,29 @@ export class UserMessageComponent extends Container {
 	private markdownTheme: MarkdownTheme;
 	private outputPad: number;
 	private markdownTransformers: readonly MarkdownTransformer[];
+	private messageId?: string;
+	/** Persisted session-entry ISO timestamp, forwarded to Markdown transformers. */
+	private timestamp?: string;
+	/** Clock time shown at the end of the message; live messages have no persisted entry timestamp. */
+	private messageTime?: number;
 
-	private timestamp?: number;
 	constructor(
 		text: string,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
-		timestamp?: number,
+		messageId?: string,
+		timestamp?: string,
+		messageTime?: number,
 	) {
 		super();
 		this.text = text;
-		this.timestamp = timestamp;
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
 		this.markdownTransformers = markdownTransformers;
+		this.messageId = messageId;
+		this.timestamp = timestamp;
+		this.messageTime = messageTime ?? (timestamp ? Date.parse(timestamp) : undefined);
 		this.rebuild();
 	}
 
@@ -56,7 +64,13 @@ export class UserMessageComponent extends Container {
 				{
 					preserveOrderedListMarkers: true,
 					preserveBackslashEscapes: true,
-					transform: createMarkdownTransform("user", false, this.markdownTransformers),
+					transform: createMarkdownTransform(
+						"user",
+						false,
+						this.markdownTransformers,
+						this.messageId,
+						this.timestamp,
+					),
 				},
 			),
 		);
@@ -70,6 +84,6 @@ export class UserMessageComponent extends Container {
 
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
-		return appendMessageTime(lines, width, this.timestamp);
+		return appendMessageTime(lines, width, this.messageTime);
 	}
 }

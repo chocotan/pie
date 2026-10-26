@@ -1,6 +1,6 @@
 import { type Context, copyJson, type Draft, type JsonRepresentation, type JsonValue } from "@earendil-works/chord";
 import { awaitWithContext } from "@earendil-works/chord/context";
-import { overlap } from "@earendil-works/chord/delta";
+import { overlap, ownedSlice } from "@earendil-works/chord/delta";
 import {
 	boundOutput,
 	OutputBuffer,
@@ -38,6 +38,7 @@ import {
 	LiveDoc,
 	type NestedToolSlot,
 	type NestedToolSummary,
+	PROGRESS_COMMIT,
 	removeNestedSlots,
 	type ToolSlot,
 	toolSlot,
@@ -109,6 +110,8 @@ export const NestedCallDoc = defineDocFamily<NestedCallState, null>({
 	scope: "task",
 	family: true,
 	initial: () => ({}),
+	// The document retires with its task.
+	checkpointWhen: () => false,
 });
 
 type Runtime = TaskRuntime<ToolTaskInput, ToolTaskCheckpoint, ToolTaskResult, ToolHooks>;
@@ -222,7 +225,13 @@ async function resolveTool(
 
 /** The call: from the input for a nested call, which hooks see with its parent, else from the assistant entry. */
 async function readCall(runtime: Runtime, input: ToolTaskInput, context: Context): Promise<ToolHookCall> {
-	if (input.kind === "nested") return { ...input.call, parent: { taskId: input.parent, callId: input.parentCallId } };
+	if (input.kind === "nested") {
+		context.telemetry.setAttributes({
+			"tool.name": input.call.name,
+			"tool.call_id": input.call.id,
+		});
+		return { ...input.call, parent: { taskId: input.parent, callId: input.parentCallId } };
+	}
 	const entry = await runtime.entry(AssistantEntry, input.assistant, context);
 	const message = entry?.model?.[0];
 	const call =
@@ -232,6 +241,10 @@ async function readCall(runtime: Runtime, input: ToolTaskInput, context: Context
 				)
 			: undefined;
 	if (call === undefined) throw new Error(`Entry ${input.assistant} has no tool call ${input.callId}`);
+	context.telemetry.setAttributes({
+		"tool.name": call.name,
+		"tool.call_id": call.id,
+	});
 	return call;
 }
 
@@ -346,12 +359,16 @@ async function run(
 			committed.catch(() => {});
 			return awaitWithContext(committed, detailsContext);
 		},
-		commit: async (change, commitContext) => {
+		commit: async (change, commitContext, options) => {
 			let result: Awaited<ReturnType<typeof change>> | undefined;
-			await runtime.commit(async (tx) => {
-				result = await change(tx);
-				return undefined;
-			}, commitContext);
+			await runtime.commit(
+				async (tx) => {
+					result = await change(tx);
+					return undefined;
+				},
+				commitContext,
+				options,
+			);
 			return result as Awaited<ReturnType<typeof change>>;
 		},
 		memo: runtime.memo,
@@ -466,7 +483,7 @@ function progressClock(runtime: Runtime): ProgressClock {
 
 /**
  * Throttled commits of what the tool reported into its slot, in `pi.live.tools` or `pi.live.nestedTools`, each writing
- * only what changed since the last one; none when `enabled` is false.
+ * only what changed since the last one, deferred (`PROGRESS_COMMIT`); none when `enabled` is false.
  */
 function publishProgress(runtime: Runtime, reported: Reported, enabled: boolean, context: Context): Progress {
 	let written = { text: "", details: undefined as JsonValue | undefined, diagnostics: 0 };
@@ -489,24 +506,28 @@ function publishProgress(runtime: Runtime, reported: Reported, enabled: boolean,
 			}
 			if (detailsChanged) bytes += utf8ByteLength(JSON.stringify(current.details ?? null));
 			if (added.length > 0) bytes += utf8ByteLength(JSON.stringify(added));
-			await runtime.commit(async (tx) => {
-				const slot = toolSlot(await tx.doc(LiveDoc, runtime.conversationId), runtime.taskId);
-				if (slot === undefined) return undefined;
-				// REMINDER: assign `output` as one string field. Chord then diffs it into an append, or a trim plus an
-				// append for a sliding tail; replacing the slot object would record the whole window on every commit.
-				if ((slot.output ?? "") !== snapshot.text) slot.output = snapshot.text;
-				if (snapshot.droppedBytes > 0) slot.droppedBytes = snapshot.droppedBytes;
-				if (snapshot.droppedLines > 0) slot.droppedLines = snapshot.droppedLines;
-				// Diff details leaf by leaf and append new diagnostics, so each commit writes only what changed.
-				if (detailsChanged && current.details !== undefined) {
-					assignJson(slot as unknown as Record<string, JsonValue>, "details", current.details);
-				}
-				if (added.length > 0) {
-					if (slot.diagnostics === undefined) slot.diagnostics = [];
-					for (const diagnostic of added) slot.diagnostics.push(diagnostic);
-				}
-				return undefined;
-			}, context);
+			await runtime.commit(
+				async (tx) => {
+					const slot = toolSlot(await tx.doc(LiveDoc, runtime.conversationId), runtime.taskId);
+					if (slot === undefined) return undefined;
+					// REMINDER: assign `output` as one string field. Chord then diffs it into an append, or a trim plus an
+					// append for a sliding tail; replacing the slot object would record the whole window on every commit.
+					if ((slot.output ?? "") !== snapshot.text) slot.output = snapshot.text;
+					if (snapshot.droppedBytes > 0) slot.droppedBytes = snapshot.droppedBytes;
+					if (snapshot.droppedLines > 0) slot.droppedLines = snapshot.droppedLines;
+					// Diff details leaf by leaf and append new diagnostics, so each commit writes only what changed.
+					if (detailsChanged && current.details !== undefined) {
+						assignJson(slot, "details", current.details);
+					}
+					if (added.length > 0) {
+						if (slot.diagnostics === undefined) slot.diagnostics = [];
+						for (const diagnostic of added) slot.diagnostics.push(diagnostic);
+					}
+					return undefined;
+				},
+				context,
+				PROGRESS_COMMIT,
+			);
 			written = current;
 			return bytes;
 		},
@@ -728,6 +749,7 @@ async function startNestedCall(
 		arguments: copyJson(args, { omitUndefinedProperties: true }) as JsonObject,
 	};
 	let id: TaskId<ToolTaskResult> | undefined;
+	let replayed = false;
 	await runtime.commit(async (tx) => {
 		// Opened, or created empty for a key not made yet.
 		const state = await tx.doc(NestedCallDoc, runtime.taskId, key, null);
@@ -740,6 +762,7 @@ async function startNestedCall(
 				jsonEqual(input.call.arguments as JsonValue, call.arguments as JsonValue);
 			if (!same) throw new Error(`Nested call ${call.id} was already made with another tool or other arguments`);
 			id = existing as TaskId<ToolTaskResult>;
+			replayed = state.result !== undefined;
 			return undefined;
 		}
 		const input: ToolTaskInput = {
@@ -770,6 +793,9 @@ async function startNestedCall(
 		id = created;
 		return undefined;
 	}, context);
+	if (replayed) {
+		context.telemetry.addEvent("pi.durable.replay", { "tool.name": name });
+	}
 	return id!;
 }
 
@@ -847,9 +873,12 @@ function truncated(
 /** Error text a nested call's summary keeps. */
 const MAX_SUMMARY_ERROR_CHARS = 500;
 
-/** How a nested call ended, for its slot: error text, from its diagnostics or else its `output`, bounded. */
+/**
+ * How a nested call ended, for its slot: error text, from its diagnostics or else its `output`, bounded. The bound is a
+ * copy, so the slot never keeps a large output alive through a slice of it.
+ */
 function summaryOf(result: NestedToolExecutionResult, output: Content): NestedToolSummary {
-	const error = result.isError ? errorTextOf(result, output).slice(0, MAX_SUMMARY_ERROR_CHARS) : "";
+	const error = result.isError ? ownedSlice(errorTextOf(result, output), 0, MAX_SUMMARY_ERROR_CHARS) : "";
 	return {
 		isError: result.isError,
 		...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),

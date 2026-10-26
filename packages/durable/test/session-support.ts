@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
+	type CommitChange,
 	type CommitPublication,
 	type ConversationId,
 	type DocumentAddress,
@@ -11,9 +12,10 @@ import {
 	type Id,
 	MemoryStorage,
 	type Seq,
+	type Session,
 	type StorageWrite,
 } from "@earendil-works/pi-durable";
-import { SessionImpl } from "../src/session/session.ts";
+import { type ObservedCommit, SessionImpl } from "../src/session/session.ts";
 
 export const context: Context = BACKGROUND_CONTEXT;
 
@@ -78,7 +80,11 @@ export class ControlledStorage extends MemoryStorage {
 		held.gate.resolve();
 	}
 
-	override async commit(writes: readonly StorageWrite[], commitContext: Context): Promise<Seq> {
+	override async commit(
+		writes: readonly StorageWrite[],
+		adopt: (seq: Seq) => void,
+		commitContext: Context,
+	): Promise<Seq> {
 		this.admittedCommits.push(writes);
 		this.commits.push(structuredClone(writes));
 		const held = this.#commitGate;
@@ -91,7 +97,7 @@ export class ControlledStorage extends MemoryStorage {
 			this.#commitFailure = undefined;
 			throw failure;
 		}
-		return super.commit(writes, commitContext);
+		return super.commit(writes, adopt, commitContext);
 	}
 
 	override mintId<I extends Id<string>>(): Promise<I> {
@@ -134,12 +140,24 @@ export function openTestSession(): {
 	return { storage, session, publications };
 }
 
-export function documentChanges(
-	publication: CommitPublication,
-): readonly Extract<DocumentCommitChange, { readonly type: "document" }>[] {
+export function documentChanges(publication: {
+	readonly changes: readonly CommitChange[];
+}): readonly Extract<DocumentCommitChange, { readonly type: "document" }>[] {
 	return publication.changes.filter(
 		(change): change is Extract<DocumentCommitChange, { readonly type: "document" }> => change.type === "document",
 	);
+}
+
+/**
+ * Observe every commit as memory adopts it, deferred ones before they are stored, as views and document watches do;
+ * `subscribeCommits()` sees only what was stored.
+ */
+export function observeCommits(
+	session: Session,
+	listener: (publication: ObservedCommit, context: Context) => void,
+): () => void {
+	// `observeCommits()` is internal, so the public type lacks it; every Session and Harness is a `SessionImpl`.
+	return (session as unknown as SessionImpl).observeCommits(listener);
 }
 
 export function documentCopyChanges(

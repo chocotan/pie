@@ -4,15 +4,46 @@
 
 ### Breaking Changes
 
+- `Storage.commit(writes, adopt, context)` takes an `adopt(seq)` callback, the Session's in-memory adoption of the batch: a storage calls it exactly once, synchronously, once the batch is durable and before its next commit starts, then resolves with `seq`, and never for a commit that fails before the batch is durable. Memory, SQLite, JSONL, and IndexedDB storages do; custom storages and wrappers must call or forward it, and the storage conformance suite checks it. A commit that rejects after its adoption fails the Session without rolling the adopted changes back.
+- `Storage.mintId()`'s contract is narrowed to IDs greater than every ID minted since the storage was opened and every ID stored, also across reopen. The bundled storages already behave so.
+- Watches use Chord's `WatchHandle` and `WatchEnd` (Durable re-exports both). End reasons are `stopped`, `cancelled`, `retired`, `ended` (was `session_closed`), `listener_error`, and `failed` (was `session_failed`). Retirement is an explicit event of the watched document incarnation (last frame `[["r", null]]`, then `retired`), never inferred from a `null` value. An ended watch drops its listener and every reference into its Session, so a stopped watch that is still referenced keeps only its last value.
+- Document, conversation view, and task graph watches deliver the commits made while their listener runs (or before `start()`) in one callback: the newest value, the commits' operations folded (appends to one string join, sets of one field keep the last) and the newest commit's Context. Past 10,000 pending operations the callback gets one root replacement `[["r", newest]]`. Before, each commit was its own callback and more than 100 pending commits became a root replacement. `watchEvents()` still delivers every event batch in order, with one `snapshot` past 100 pending batches.
+- Removed the Chord state getters `Session.documentState()`, `Conversation.viewState()`, and `Harness.taskGraph()`, and the `DocumentState` type; use `watchDoc()`, `Conversation.watch()`, and `Harness.watchTaskGraph()`. Durable no longer uses Chord's `replicatedState()`.
+- Partial answers and running tool output are stored later than they are shown: their throttled commits are deferred (`CommitPersistence`, spec §4.1), so watches, views, and agent events see each at once, while Storage gets them together with the next commit that reads `pi.live` (the end of the answer, a tool settling, a run ending) and at the latest after `settings.progress.persistWithinMs` (default 1,000 ms). With 32 streams over SQLite this cuts storage transactions about 5.7x and disk writes about 2.9x for turns with parallel tools, 27x and 9x for long answers, and CPU by about a quarter. A crash now loses up to about a second of streamed content instead of 100 ms; a stream that crashes before its first store leaves no aborted entry, and that attempt's usage is not recorded. `subscribeCommits()` gets these commits only once they are stored, with exactly what was stored (held operations first), and gets a publication for a deadline's store too; it no longer sees every partial. Migration: a `subscribeCommits()` listener that showed live progress should use `watchDoc()`, `Conversation.watch()`, or `watchEvents()`; one that mirrors Storage keeps working; set `settings.progress.persistWithinMs: 0` to store progress right after each commit, about as before (one storage transaction per partial).
+
+### Added
+
+- Deferred commits: `Session.commit()`, `Conversation.commit()`, `TaskRuntime.commit()`, and a tool's `api.commit()` take `{ persistence: { kind: "deferred", withinMs? } }`. A commit that changes only existing conversation documents with `history: "latest"` and `fork: "initial"` is then adopted in memory and shown to watches at once, and stored with the next commit that reads or writes the document, before the document leaves memory, at close, or within `withinMs` (default `settings.progress.persistWithinMs`, or `createSession(storage, { persistWithinMs })`); any other write makes it immediate. A crash loses what is held. See spec §4.1.
+- `HarnessOptions.readOnly` opens a Harness as a viewer of a session another process drives: open leaves running tasks as committed instead of recovering them, every commit with writes rejects with `ReadOnlySession` before it reaches Storage, and `resume()` and every call that would run tasks reject with it.
+
+### Changed
+
+- Document, conversation view, task graph, and event watches use Chord's watch handles (`Watch`, and `NativeWatch` for event batches).
+
+### Fixed
+
+- Fixed a tool round with `control.handoff` ending the run on the tool-calling answer: the handoff's `pi.reset` entry is written and the same run continues with a new generation in the new context, so the submission settles with the eventual answer. Queued writes and selected steers are placed after the handoff text, follow-ups wait for the run's final boundary, and a queued reset still ends the run `unanswered` with reason `reset`. `terminate` remains the way to end a round without another model request.
+- Fixed a conversation watcher (`watchEvents()`, conversation views) holding a copy of a streamed text or tool call per partial commit, through Chord append ops that kept the whole string alive; a 140 KB answer followed by a 140 KB tool call held well over 100 MB ([#9265](https://github.com/earendil-works/pi/issues/9265))
+- Fixed a nested call's error summary keeping the call's whole output alive through a slice of it ([#9265](https://github.com/earendil-works/pi/issues/9265))
+- Fixed task span error messages and codemode call previews keeping the whole text they were cut from alive ([#9265](https://github.com/earendil-works/pi/issues/9265))
+- Fixed partial commits of a streamed answer copying every growing text, thinking and tool-call argument string in full on each commit (about 20 s of CPU and a 100 MB heap peak for a 500 KB tool call): they now append new text with Chord's `appendText()`, and apply the argument changes of their own parse of the streamed argument text ([#9265](https://github.com/earendil-works/pi/issues/9265))
+- Fixed stored assistant messages lacking `thinkingLevel`: a generation records the Pi thinking level its request asked for on the response, also after polling a deferred one, as pi-agent-core's agent loop does
+
+## [1.4.0] - 2026-10-21
+
+### Breaking Changes
+
 - `TaskRuntime.sleep()` is removed: it waited inside a phase, which holds an invocation and, after a restart, reruns the phase and restarts the wait. A task now ends its phase asleep with `runtime.sleepUntil(until, checkpoint, context)` or by returning `{ status: "sleeping", until, checkpoint }` from `runtime.commit()`; move the work after the wait into the next phase and carry what it needs in the checkpoint. `TaskRuntime.setTimer()` paces work inside a phase without waiting for it.
 - Tasks have a `sleeping` status, so code that handles every `TaskState`, `TaskGraphState`, or `TaskInspection` state needs a case for it.
 - Opening a SQLite storage migrates it to schema version 2 automatically, rebuilding its task table. A migrated database cannot be opened by 1.3.0 or earlier, so a deployment cannot roll back past this release. JSONL storage needs no migration, but 1.3.0 or earlier never resumes a sleeping task it finds (a run's conversation stays busy).
 - `TaskRuntime` has `sleepUntil()` and `setTimer()`, and `ToolExecutionApi` has `now()`: code that builds either object by hand, such as a test fake or a tool wrapper that does not spread the original, must add them.
 - A task cut off by a crash 5 times in a row without committing a new state is parked instead of run again (see the crash-loop guard under Added); set `settings.restartLimit` to `Infinity` to keep the old behavior. `TaskInspection`'s blocked reasons include `restart_limit`.
+- `defineDoc()` and `defineDocFamily()` require an explicit `checkpointWhen` predicate on every definition; there is no default. Use `() => false` to keep ordinary changes as deltas, or supply a policy that periodically writes a base.
 
 ### Added
 
-- `HarnessOptions.telemetry` accepts a host-owned telemetry context with optional propagation and metrics capabilities. This change adds the configuration type only; Durable instrumentation and persisted carriers are not yet implemented.
+- Added `IndexedDbStorage` (`@earendil-works/pi-durable/storage/indexeddb`), a browser storage backed by IndexedDB.
+- `HarnessOptions.telemetry` emits the content-free `DURABLE_TELEMETRY_SCHEMA`: public submission admission spans, task phase spans (including extension tasks), committed entry and submission events, running phase-change checkpoints, and nested-tool replay events. Optional propagation stores opaque carriers on submissions and tasks so queued inputs and reopened tasks retain their trace; `TaskOptions.trace` accepts a carrier override or `"root"` (absence inherits the creator's carrier); creation-time `links` connect inputs sharing a run, while steer admissions link to the running trace. Internal admissions emit events without a submit span. Optional metrics record phase duration and live task counts. Failed phases record fixed error-status categories (`task_faulted`, `task_failed`, `task_orphaned`) and diagnostics capped at 500 characters; aborted phases keep status `ok`. Every `onReport` report also emits a fixed-field `pi.durable.report` event on its current span (dropped by the NOOP span when there is none), plus a `pi.durable.reports` counter by type; report telemetry contains no error payload and leaves the callback unchanged. Clock failures report without a phase context. Generation and compaction forward their phase context to pi-ai requests.
 - `settings.compaction.modelOverrides` sets compaction thresholds per model, keyed by exact `"provider/modelId"`, so one harness can serve small- and large-window models; the threshold check, overflow recovery, and the compaction task use the entry of the model they act for ([#10942](https://github.com/earendil-works/pi/issues/10942)).
 - Durable sleeps: a sleeping task holds no invocation, survives restarts, and resumes at its checkpoint once the Harness clock reaches `until`.
 - `HarnessOptions.setTimer` arms the timers of the Session, the scheduler, and its tasks (progress throttles, idle-memory eviction, sleeps), also for `createSession()`; with `now`, they run on a host or fake clock. A foreground timer the host throws on or declines falls back to `setTimeout`. `ToolExecutionApi.now()` reads the Harness clock.
@@ -21,6 +52,7 @@
 - `onReport(error, info)`: `info` (`ReportInfo`) says what happened in `type`: `session_failed`; `task_faulted`, `task_parked`, `migration_failed`, `task_outdated`, or `task_error` with the task and the extension that installed it; `extension_error` with the extension's name; `host_error` with the failing `HostCallback`; or `listener_error`.
 - `settings.afterFailedRun`: a run that fails with `model_error` or `no_model` keeps the inputs queued behind it (`keep`, the default), starts the next run with them (`continue`), or settles them `unanswered` with reason `run_failed` (`withdraw`).
 - The task graph shows why a task cannot run (`TaskGraphNode.blocked`: `missing_task`, `task_too_old`, `migration_failed`, or `restart_limit`) and follows registry changes and failed migrations.
+- Added `HarnessOptions.identity` (a pi-ai `ClientIdentity`) to set the `User-Agent` and provider attribution of every model request through the Harness, including hooks and tools. `api.models` in tools and hooks is now a wrapper of the host's `Models` that adds the identity, not the same object.
 - `HarnessOptions.models` and `HarnessOptions.settings` also accept a function returning the current value, like `env`. Generation, compaction, hooks and tools call it at each use (`api.models` reads the current value at each access), so a host can replace its model configuration or settings without reopening the Harness. A plain object still works.
 
 ### Changed
@@ -30,13 +62,13 @@
 - Generation retry backoffs, deferred-response polls, and compaction retry backoffs sleep instead of waiting in a running phase, so a process can stop or hibernate during them. A record an earlier version stored mid-backoff sleeps again when it resumes before its time. A deferred poll whose model is gone after a reopen now fails `no_model` once the poll is due, not at once.
 - Code mode measures script deadlines and wall time on the Harness clock (`HarnessOptions.now`) instead of `Date.now()`.
 - SQLite drivers, portable interfaces, and the generic migration runner now come from `@earendil-works/chord/sqlite`. Existing Durable SQLite entry points keep re-exporting their public names; storage helpers and Durable schema migrations stay here.
-
 - `ToolControl.terminate` is now typed `boolean` instead of `true`, matching `pi-agent-core` and `pi-coding-agent`; `false` does not end the run ([#10858](https://github.com/earendil-works/pi/issues/10858)).
 
 ### Fixed
 
 - In Cloudflare Workers with `nodejs_compat`, the timers that evict idle documents and contexts were armed, since timers there have an `unref()`; a pending one kept a Durable Object from hibernating and blocked its eviction. They are now declined in Workers, and memory is freed at later commits.
 - The README's Errors section now limits the `StorageRequestError` exemption to reads: a `StorageRequestError` thrown by `commit()` or `mintId()` fails the Harness like any other storage error ([#11014](https://github.com/earendil-works/pi/issues/11014)).
+- The Node environment now detects the legacy WSL `bash.exe` launcher from `%SystemRoot%` instead of assuming `C:\Windows` ([#9501](https://github.com/earendil-works/pi/pull/9501) by [@petrroll](https://github.com/petrroll)).
 
 ## [1.3.0] - 2026-10-15
 

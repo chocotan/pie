@@ -35,6 +35,7 @@
  * call with an error result.
  */
 import { type Context, copyJson, type JsonValue } from "@earendil-works/chord";
+import { ownedSlice } from "@earendil-works/chord/delta";
 import type { TextContent } from "@earendil-works/pi-ai";
 import {
 	type CodemodeHostCall,
@@ -126,6 +127,8 @@ export const CodemodeRunDoc = defineDoc<RunState>({
 	version: 1,
 	scope: "task",
 	initial: () => ({}),
+	// The document retires with its task.
+	checkpointWhen: () => false,
 });
 
 type JournalEntry = {
@@ -150,6 +153,8 @@ export const CodemodeJournalDoc = defineDoc<JournalState>({
 	version: 1,
 	scope: "task",
 	initial: () => ({ entries: [] }),
+	// The document retires with its task.
+	checkpointWhen: () => false,
 });
 
 /**
@@ -163,6 +168,7 @@ export const CodemodeStoreDoc = defineDoc<{ values: Record<string, JsonValue> }>
 	history: "rewindable",
 	fork: "asOf",
 	initial: () => ({ values: {} }),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
 /** One tool call a script made, as the code mode call's details show it. */
@@ -193,7 +199,8 @@ const ARGS_PREVIEW_CHARS = 200;
 const ERROR_PREVIEW_CHARS = 500;
 
 function cut(text: string, max: number): string {
-	return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+	// A copy: the row outlives the arguments or error text it previews.
+	return text.length > max ? `${ownedSlice(text, 0, max - 3)}...` : text;
 }
 
 /** A function scripts call as a top-level global; its result is journaled. */

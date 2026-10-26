@@ -34,9 +34,9 @@ async function record(conversation: Conversation) {
 
 /** A freshly built view of `conversation`, for comparing with an advanced one. */
 async function fresh(conversation: Conversation): Promise<ConversationView> {
-	const state = await conversation.viewState(context);
-	const value = state.value;
-	state.dispose();
+	const watch = await conversation.watch(context);
+	const value = watch.value;
+	await watch.stop();
 	return value;
 }
 
@@ -228,9 +228,10 @@ describe("conversation view", () => {
 		await harness.close(context);
 	});
 
-	it("replaces undelivered frames with the newest view after 100 pending frames", async () => {
+	it("folds undelivered commits into one call whose ops reach the newest view", async () => {
 		const { harness, root } = await openChat(new MemoryStorage(), chatSetup());
 		const watch = await root.watch(context);
+		const initial = watch.value;
 		for (let index = 0; index < 101; index++) {
 			await root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context);
 		}
@@ -240,26 +241,27 @@ describe("conversation view", () => {
 		});
 		await drained();
 		expect(frames).toHaveLength(1);
-		expect(frames[0]!.ops).toEqual([["r", frames[0]!.value]]);
+		expect(frames[0]!.ops[0]?.[0]).not.toBe("r");
+		expect(applyImmutable(initial, frames[0]!.ops)).toEqual(frames[0]!.value);
 		expect(frames[0]!.value.entries).toHaveLength(101);
 		await watch.stop();
 		await harness.close(context);
 	});
 
-	it("keeps states and watches of one conversation independent and remounts after the last one detaches", async () => {
+	it("keeps watches of one conversation independent and remounts after the last one detaches", async () => {
 		const { harness, root } = await openChat(new MemoryStorage(), chatSetup());
-		const state = await root.viewState(context);
+		const kept = await record(root);
 		const { frames, stop } = await record(root);
 		await root.commit((tx) => tx.appendEntry(root.id, { kind: "one" }), context);
 		await drained();
-		expect(state.value.entries.map((entry) => entry.kind)).toEqual(["one"]);
+		expect(kept.frames.at(-1)!.value.entries.map((entry) => entry.kind)).toEqual(["one"]);
 		await stop();
 		expect(frames).toHaveLength(1);
 		await root.commit((tx) => tx.appendEntry(root.id, { kind: "two" }), context);
 		await drained();
-		expect(state.value.entries.map((entry) => entry.kind)).toEqual(["one", "two"]);
-		const last = state.value;
-		state.dispose();
+		const last = kept.frames.at(-1)!.value;
+		expect(last.entries.map((entry) => entry.kind)).toEqual(["one", "two"]);
+		await kept.stop();
 		// No observer is left, so the mount was dropped: a new observer builds a new revision from committed state.
 		const rebuilt = await fresh(root);
 		expect(rebuilt).toEqual(last);
@@ -267,15 +269,13 @@ describe("conversation view", () => {
 		await harness.close(context);
 	});
 
-	it("ends states and watches at close and rejects later acquisition", async () => {
+	it("ends watches at close and rejects later acquisition", async () => {
 		const { harness, root } = await openChat(new MemoryStorage(), chatSetup());
 		const watch = await root.watch(context);
-		const state = await root.viewState(context);
 		await harness.close(context);
-		expect(await watch.closed).toEqual({ reason: "session_closed" });
-		expect(state.value.entries).toEqual([]);
+		expect(await watch.closed).toEqual({ reason: "ended" });
+		expect(watch.value.entries).toEqual([]);
 		await expect(root.watch(context)).rejects.toThrow();
-		await expect(root.viewState(context)).rejects.toThrow();
 	});
 
 	it("rejects an acquisition cancelled or closed while it waits for the Session line", async () => {
@@ -308,9 +308,9 @@ describe("conversation view", () => {
 		const { harness, root } = await openChat(new MemoryStorage(), chatSetup());
 		const failing = await root.watch(context);
 		const { frames, stop } = await record(root);
-		const shared = await root.viewState(context);
+		const shared = await root.watch(context);
 		expect(failing.value).toBe(shared.value);
-		shared.dispose();
+		await shared.stop();
 		failing.start(async () => {
 			throw new Error("listener failed");
 		});
@@ -326,6 +326,7 @@ describe("conversation view", () => {
 	it("publishes one frame for a commit that appends several entries and edits a document", async () => {
 		const { harness, root } = await openChat(new MemoryStorage(), chatSetup());
 		const Other = defineDoc<{ n: number }>({
+			checkpointWhen: () => false,
 			kind: "app.other",
 			version: 1,
 			scope: "conversation",

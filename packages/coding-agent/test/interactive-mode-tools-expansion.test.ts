@@ -16,7 +16,14 @@ describe("InteractiveMode.setToolsExpanded custom messages", () => {
 			);
 			const chatContainer = new Container();
 			chatContainer.addChild(component);
-			const context = { toolOutputExpanded: false, chatContainer, showStatus: vi.fn() };
+			const context = {
+				toolOutputExpanded: false,
+				customHeader: undefined,
+				builtInHeader: undefined,
+				loadedResourcesContainer: new Container(),
+				chatContainer,
+				showStatus: vi.fn(),
+			};
 			const prototype = InteractiveMode.prototype as unknown as {
 				setToolsExpanded(this: typeof context, expanded: boolean): void;
 			};
