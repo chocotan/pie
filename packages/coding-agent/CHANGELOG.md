@@ -17,6 +17,7 @@
 - Changed thinking and tool rows: a thought stays collapsed with a one-line preview of its latest content while it streams, one click anywhere in an expanded tool or thought collapses it while a drag still selects text, and user messages, assistant messages, thinking headers, and tool headers show when they happened (`HH:MM` for today, `Nh ago` or `Nd ago` for earlier days).
 - Todo and Subagents floating panels now show at most five items, with a view-all entrance for the remaining records.
 - Background task and subagent completion notifications now show compact, expandable status summaries instead of transport type names and raw JSON.
+- Background task and subagent completion notifications now steer active runs so the parent can adapt its next step, and `steeringMode` defaults to `all` so simultaneous steering messages are delivered in one model request.
 - `pi update` for installs from the pi.dev installer no longer passes `--min-release-age=0` to `npm ci`. The release lockfile pins every package, so the flag had no effect, and security scanners that block it stopped the update ([#11262](https://github.com/earendil-works/pi/issues/11262))
 - `/model` and `/scoped-models` now show a model's name next to its ID when the name adds words the ID lacks, such as a renamed `models.json` override ([#5916](https://github.com/earendil-works/pi/issues/5916), [#11347](https://github.com/earendil-works/pi/pull/11347))
 

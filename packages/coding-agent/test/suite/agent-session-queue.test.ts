@@ -207,6 +207,7 @@ describe("AgentSession queue characterization", () => {
 		const waiting = await createWaitingHarness();
 		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;
 		harnesses.push(harness);
+		harness.session.setSteeringMode("one-at-a-time");
 
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
@@ -306,20 +307,22 @@ describe("AgentSession queue characterization", () => {
 		expect(getAssistantTexts(harness)).toEqual(["", "original turn complete", "batched follow-up response"]);
 	});
 
-	it("queues custom messages with deliverAs steer while streaming", async () => {
+	it("delivers all custom steering messages in one batch in all mode", async () => {
 		const waiting = await createWaitingHarness();
 		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;
 		harnesses.push(harness);
-		let sawCustomMessage = false;
+		harness.session.setSteeringMode("all");
+		let steeredTexts: string[] = [];
 
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
 			(context) => {
-				sawCustomMessage = context.messages.some(
-					(message) =>
-						message.role === "user" &&
-						typeof message.content !== "string" &&
-						message.content.some((part) => part.type === "text" && part.text === "steer custom"),
+				steeredTexts = context.messages.flatMap((message) =>
+					message.role === "user" && typeof message.content !== "string"
+						? message.content.flatMap((part) =>
+								part.type === "text" && part.text.startsWith("steer custom") ? [part.text] : [],
+							)
+						: [],
 				);
 				return fauxAssistantMessage("done");
 			},
@@ -327,16 +330,19 @@ describe("AgentSession queue characterization", () => {
 
 		await waitForToolStart;
 		await harness.session.sendCustomMessage(
-			{ customType: "queue-test", content: "steer custom", display: true, details: { value: 1 } },
+			{ customType: "queue-test", content: "steer custom 1", display: true, details: { value: 1 } },
+			{ deliverAs: "steer" },
+		);
+		await harness.session.sendCustomMessage(
+			{ customType: "queue-test", content: "steer custom 2", display: true, details: { value: 2 } },
 			{ deliverAs: "steer" },
 		);
 		releaseToolExecution();
 		await promptPromise;
 
-		expect(sawCustomMessage).toBe(true);
-		expect(
-			harness.session.messages.some((message) => message.role === "custom" && message.customType === "queue-test"),
-		).toBe(true);
+		expect(steeredTexts).toEqual(["steer custom 1", "steer custom 2"]);
+		expect(harness.session.messages.filter((message) => message.role === "custom")).toHaveLength(2);
+		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
 	it("queues custom messages with deliverAs followUp while streaming", async () => {

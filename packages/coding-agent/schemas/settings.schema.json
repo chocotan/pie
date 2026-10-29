@@ -84,7 +84,7 @@
           "const": "one-at-a-time"
         }
       ],
-      "default": "one-at-a-time"
+      "default": "all"
     },
     "followUpMode": {
       "anyOf": [

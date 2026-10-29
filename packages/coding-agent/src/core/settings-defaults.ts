@@ -4,7 +4,7 @@ import { DEFAULT_MAX_AGENT_RETRY_DELAY_MS } from "@earendil-works/pi-ai/utils/re
 export const SETTINGS_DEFAULTS = {
 	transport: "auto",
 	sessionShareDestination: "auto",
-	steeringMode: "one-at-a-time",
+	steeringMode: "all",
 	followUpMode: "one-at-a-time",
 	compaction: {
 		enabled: true,

@@ -29,7 +29,7 @@ See [Choose a Model](models.md) for model selection and thinking controls.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `steeringMode` | `"all" \| "one-at-a-time"` | `"one-at-a-time"` | How queued steering messages are delivered. |
+| `steeringMode` | `"all" \| "one-at-a-time"` | `"all"` | How queued steering messages are delivered. |
 | `followUpMode` | `"all" \| "one-at-a-time"` | `"one-at-a-time"` | How queued follow-up messages are delivered. |
 | `externalEditor` | string | `$VISUAL`, `$EDITOR`, then platform default | Command opened by the external-editor keybinding. |
 | `doubleEscapeAction` | `"tree" \| "fork" \| "none"` | `"tree"` | Action for double Escape with an empty editor. |

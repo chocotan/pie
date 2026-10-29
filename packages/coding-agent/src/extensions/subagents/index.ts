@@ -523,7 +523,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 									display: true,
 									details: record,
 								},
-								{ triggerTurn: true, deliverAs: "followUp" },
+								{ triggerTurn: true, deliverAs: "steer" },
 							);
 						}
 					}

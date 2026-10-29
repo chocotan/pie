@@ -156,7 +156,7 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 							details: task,
 							content: `<background-task-notification>\n${JSON.stringify({ taskId: task.id, description: task.description, status: task.status, exitCode: task.exitCode, error: task.error, outputPath: task.outputPath })}\nTask finished and output is closed. Any persistence or cleanup error is included above. Use bg_logs only if output is needed; do not poll bg_status to reconfirm.\n</background-task-notification>`,
 						},
-						{ deliverAs: "followUp", triggerTurn: task.triggerOnCompletion },
+						{ deliverAs: "steer", triggerTurn: task.triggerOnCompletion },
 					),
 			});
 			refresh();
@@ -176,7 +176,7 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 				"Start a background shell command and return its ID, PID and log path immediately. Output is capped at 20MiB; exceeding the cap stops the process tree. Uses Pie's Bash/PowerShell policy. Requires a TUI or RPC session. Shell replacements require an adapter and are rejected.",
 			promptSnippet: "Start a long-running background shell command",
 			promptGuidelines: [
-				"Completion notifications and follow-up turns are enabled by default. After bg_run continue independent work or end your turn; do not poll or sleep waiting. Use bg_status/bg_logs only for deliberate inspection. All tasks stop on session shutdown or reload.",
+				"Completion notifications and steering turns are enabled by default. After bg_run continue independent work or end your turn; do not poll or sleep waiting. Use bg_status/bg_logs only for deliberate inspection. All tasks stop on session shutdown or reload.",
 			],
 			async execute(_id, args: Static<typeof runSchema>, signal, _update, ctx) {
 				if (ctx.mode !== "tui" && ctx.mode !== "rpc")
@@ -203,7 +203,7 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 					task,
 					guidance: task.notifyOnCompletion
 						? task.triggerOnCompletion
-							? "Completion will notify and start a follow-up turn; do not poll."
+							? "Completion will notify and steer an active run or start a turn when idle; do not poll."
 							: "Completion will notify without starting a turn."
 						: "Completion notifications are disabled; inspect deliberately with bg_status/bg_logs.",
 				});
