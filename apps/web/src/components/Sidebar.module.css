@@ -1,0 +1,116 @@
+/* 工作区树（左栏新增部分；会话项沿用全局 .session-item） */
+
+.wsRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 8px;
+  margin-top: 4px;
+  border-radius: var(--r-sm);
+  color: var(--text-1);
+  font-weight: 500;
+  text-align: left;
+  transition: background var(--dur) var(--ease);
+}
+.wsRow:hover { background: var(--bg-hover); }
+.wsRow[aria-current="true"] { background: var(--bg-active); }
+.wsRow .icon { width: 15px; height: 15px; color: var(--text-3); }
+.wsRow[aria-current="true"] .icon { color: var(--accent); }
+.wsName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wsChevron {
+  transition: transform var(--dur) var(--ease);
+  color: var(--text-3);
+}
+.wsChevron[data-open="true"] { transform: rotate(90deg); }
+.wsStatus {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-3);
+  opacity: 0.4;
+}
+.wsStatus[data-status="running"] { background: var(--green); opacity: 1; }
+.wsStatus[data-status="starting"] { background: var(--amber); opacity: 1; }
+.wsStatus[data-status="error"] { background: var(--red); opacity: 1; }
+.wsRemove {
+  visibility: hidden;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  border-radius: var(--r-xs);
+}
+.wsRow:hover .wsRemove, .wsRemove:focus-visible { visibility: visible; }
+.wsRemove:hover { background: var(--bg-active); color: var(--red); }
+.wsRemove .icon { width: 13px; height: 13px; }
+
+.wsSessions { margin-left: 14px; padding-left: 8px; border-left: 1px solid var(--border-l2); }
+.wsEmpty { padding: 4px 10px 8px; font-size: 12px; color: var(--text-3); }
+
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--text-1);
+  background: var(--bg-layer-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-xs);
+  padding: 2px 6px;
+}
+
+.addForm { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.addForm input {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  color: var(--text-1);
+  background: var(--bg-layer-1);
+  border: 1px solid var(--border-l4);
+  border-radius: var(--r-sm);
+}
+.addForm input:focus { outline: none; border-color: var(--accent); }
+.addRow { display: flex; gap: 6px; justify-content: flex-end; }
+.addBtn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.addBtn:disabled { opacity: 0.5; cursor: default; }
+.addCancel { padding: 4px 12px; font-size: 12px; border-radius: var(--r-sm); color: var(--text-2); }
+.addCancel:hover { background: var(--bg-hover); }
+.addToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 8px;
+  margin-top: 4px;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  font-size: 13px;
+  transition: background var(--dur) var(--ease);
+}
+.addToggle:hover { background: var(--bg-hover); color: var(--text-1); }
+.addToggle .icon { width: 14px; height: 14px; }
+
+.sessionMeta {
+  display: block;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"target": "ES2024",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"lib": ["ES2024"],
+		"strict": true,
+		"erasableSyntaxOnly": true,
+		"verbatimModuleSyntax": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"resolveJsonModule": true,
+		"types": ["node"]
+	},
+	"include": ["host/**/*.ts", "shared/**/*.ts", "test/**/*.ts", "vite.config.ts", "vitest.config.ts"]
+}

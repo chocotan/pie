@@ -33,6 +33,8 @@
 		"diff:model-catalog": "node scripts/diff-model-catalog.mjs",
 		"update:model-catalog-pin": "node scripts/update-model-catalog-pin.mjs",
 		"eval": "npm run eval --workspace=@earendil-works/pi-evals --",
+		"dev:web": "npm run dev --workspace=@pie/web --",
+		"start:web": "npm run start --workspace=@pie/web --",
 		"check:model-catalog": "node scripts/publish-model-catalog.mjs --input .artifacts/model-catalog --dry-run",
 		"check:model-catalog-compat": "node scripts/check-model-catalog-compat.mjs",
 		"profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",

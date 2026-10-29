@@ -1,0 +1,25 @@
+{
+	"name": "@pie/web",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "node host/main.ts --dev",
+		"start": "node host/main.ts",
+		"build": "vite build",
+		"typecheck": "tsc --noEmit -p tsconfig.host.json && tsc --noEmit -p tsconfig.web.json",
+		"test": "vitest --run"
+	},
+	"dependencies": {
+		"react": "18.3.1",
+		"react-dom": "18.3.1",
+		"ws": "8.21.0"
+	},
+	"devDependencies": {
+		"@types/react": "18.3.31",
+		"@types/react-dom": "18.3.7",
+		"@types/ws": "8.18.2",
+		"vite": "8.3.4",
+		"vitest": "4.1.12"
+	}
+}

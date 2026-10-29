@@ -1,0 +1,910 @@
+<!-- pie Web UI 静态交互原型：仅演示，无后端，所有数据为本地模拟。直接以 file:// 打开即可。 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pie — Web UI 原型</title>
+<style>
+/* ===== Design tokens（对齐参考：neutral-bluish 灰阶 / 蓝色强调 / radius / motion） ===== */
+:root {
+  --font-text: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, Menlo, Courier,
+    'PingFang SC', 'Microsoft YaHei', monospace;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur: 0.2s;
+  --r-xs: 4px; --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+
+  --bg-layer-1: #ffffff;
+  --bg-layer-2: #f9fafb;
+  --bg-layer-3: #f1f3f5;
+  --bg-hover: #edf0f4;
+  --bg-active: #e5eaf1;
+  --border-l2: #e1e5ee;
+  --border-l4: #cfd3d6;
+  --text-1: #1b1b1c;
+  --text-2: #53555a;
+  --text-3: #69707c;
+  --accent: #3567d6;
+  --accent-hover: #2f56b5;
+  --accent-soft: #edf3fe;
+  --on-accent: #ffffff;
+  --green: #15803d;
+  --amber: #b45309;
+  --red: #b91c1c;
+  --violet: #7c5aef;
+  --code-bg: #f5f7fa;
+  --scrim: rgb(15 17 21 / 40%);
+  --shadow-pop: 0 8px 32px rgb(15 17 21 / 14%);
+  color-scheme: light;
+}
+[data-theme="dark"] {
+  --bg-layer-1: #1b1b1c;
+  --bg-layer-2: #212123;
+  --bg-layer-3: #2c2c2e;
+  --bg-hover: #2c2c2e;
+  --bg-active: #353538;
+  --border-l2: #353538;
+  --border-l4: #43454a;
+  --text-1: #ebecee;
+  --text-2: #adafb6;
+  --text-3: #9ca3af;
+  --accent: #7aa2ff;
+  --accent-hover: #5686fe;
+  --accent-soft: #28334b;
+  --on-accent: #0f1115;
+  --green: #4ade80;
+  --amber: #fbbf24;
+  --red: #f87171;
+  --code-bg: #242426;
+  --scrim: rgb(0 0 0 / 55%);
+  --shadow-pop: 0 8px 32px rgb(0 0 0 / 45%);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-text);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-1);
+  background: var(--bg-layer-1);
+  overflow: hidden;
+}
+@media (max-width: 767px) { body { font-size: 16px; } }
+
+button {
+  font: inherit; color: inherit; background: none; border: none;
+  padding: 0; cursor: pointer; border-radius: var(--r-sm);
+}
+button:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.icon { width: 18px; height: 18px; flex: none; display: block; }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; color: var(--text-2);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.icon-btn:hover { background: var(--bg-hover); color: var(--text-1); }
+
+/* ===== AppFrame 三栏 ===== */
+.app { display: flex; height: 100dvh; }
+
+/* --- 左栏：会话侧栏（>=1024px: 280px；768–1023px: 56px rail；<768px: drawer） --- */
+.sidebar {
+  width: 280px; flex: none; display: flex; flex-direction: column;
+  background: var(--bg-layer-2); border-right: 1px solid var(--border-l2);
+}
+.brand {
+  display: flex; align-items: center; gap: 8px; padding: 14px 16px 10px;
+  font-weight: 600; font-size: 16px; letter-spacing: 0.2px;
+}
+.brand .logo { color: var(--accent); display: inline-flex; }
+.new-chat {
+  margin: 4px 12px 10px; padding: 8px 12px; display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border-l4); border-radius: var(--r-md);
+  background: var(--bg-layer-1); color: var(--text-1); font-weight: 500;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.new-chat:hover { background: var(--bg-hover); border-color: var(--text-3); }
+.session-list { flex: 1; overflow-y: auto; padding: 0 8px; }
+.session-group {
+  padding: 8px 8px 4px; font-size: 12px; color: var(--text-3);
+}
+.session-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 10px; margin-bottom: 2px; text-align: left;
+  color: var(--text-2); border-radius: var(--r-sm);
+  transition: background var(--dur) var(--ease);
+}
+.session-item:hover { background: var(--bg-hover); }
+.session-item[aria-current="true"] { background: var(--bg-active); color: var(--text-1); }
+.session-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-top: 1px solid var(--border-l2); color: var(--text-3); font-size: 12px;
+}
+
+/* rail 模式（768–1023px） */
+.rail-only { display: none; }
+@media (min-width: 768px) and (max-width: 1023px) {
+  .sidebar { width: 56px; align-items: center; padding-top: 8px; }
+  .brand, .new-chat, .session-list, .sidebar-foot .foot-label { display: none; }
+  .rail-only { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; width: 100%; }
+  .rail-dot {
+    width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+    border-radius: var(--r-sm); color: var(--text-2); font-size: 13px; font-weight: 600;
+    transition: background var(--dur) var(--ease);
+  }
+  .rail-dot:hover { background: var(--bg-hover); }
+  .rail-dot[aria-current="true"] { background: var(--bg-active); color: var(--accent); }
+  .rail-spacer { flex: 1; }
+}
+
+/* --- 中央对话 --- */
+.main {
+  flex: 1; min-width: 400px; display: flex; flex-direction: column; background: var(--bg-layer-1);
+}
+.chat-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+  border-bottom: 1px solid var(--border-l2);
+}
+.chat-head h1 {
+  flex: 1; min-width: 0; margin: 0; font-size: 14px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mobile-only { display: none; }
+@media (max-width: 767px) { .mobile-only { display: inline-flex; } }
+
+.chat-body { flex: 1; overflow-y: auto; padding: 20px 0 12px; }
+.thread { max-width: 760px; margin: 0 auto; padding: 0 24px; display: flex; flex-direction: column; gap: 20px; }
+@media (max-width: 767px) { .thread { padding: 0 14px; } }
+
+.msg-user {
+  align-self: flex-end; max-width: 85%;
+  background: var(--accent-soft); color: var(--text-1);
+  padding: 10px 14px; border-radius: var(--r-lg); border-bottom-right-radius: var(--r-xs);
+  white-space: pre-wrap; word-break: break-word;
+}
+.msg-agent { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
+.msg-agent .body { white-space: pre-wrap; word-break: break-word; }
+.msg-agent .body code, .msg-user code {
+  font-family: var(--font-code); font-size: 0.88em;
+  background: var(--code-bg); border: 1px solid var(--border-l2);
+  border-radius: var(--r-xs); padding: 1px 5px;
+}
+.empty-state {
+  margin: auto; text-align: center; color: var(--text-3); padding: 48px 16px;
+}
+.empty-state .big { font-size: 18px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
+
+/* Thinking 块 */
+.thinking { border-left: 2px solid var(--border-l4); padding: 2px 0 2px 12px; color: var(--text-3); font-size: 13px; }
+.thinking .label { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.thinking .label .icon { width: 15px; height: 15px; }
+
+/* 工具调用卡 */
+.tool-card { border: 1px solid var(--border-l2); border-radius: var(--r-md); overflow: hidden; background: var(--bg-layer-2); }
+.tool-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px;
+  text-align: left; color: var(--text-2); font-size: 13px;
+  transition: background var(--dur) var(--ease);
+}
+.tool-head:hover { background: var(--bg-hover); }
+.tool-head .icon { width: 15px; height: 15px; }
+.tool-head .name { font-family: var(--font-code); color: var(--text-1); }
+.tool-head .chev { margin-left: auto; transition: transform var(--dur) var(--ease); }
+.tool-card[data-open="true"] .tool-head .chev { transform: rotate(90deg); }
+.tool-detail { display: none; border-top: 1px solid var(--border-l2); padding: 10px 12px; }
+.tool-card[data-open="true"] .tool-detail { display: block; }
+.tool-detail pre {
+  margin: 0; font-family: var(--font-code); font-size: 12.5px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-all; color: var(--text-2);
+}
+.tool-detail pre + pre { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-l2); }
+.badge {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500;
+  padding: 1px 7px; border-radius: 999px; line-height: 1.5;
+}
+.badge.ok { color: var(--green); background: rgb(34 197 94 / 10%); }
+.badge.run { color: var(--amber); background: rgb(245 158 11 / 12%); }
+.badge.err { color: var(--red); background: rgb(239 68 68 / 10%); }
+.badge.info { color: var(--accent); background: var(--accent-soft); }
+
+/* 扩展提问卡 */
+.ask-card {
+  border: 1px solid var(--border-l2); border-radius: var(--r-md);
+  background: var(--bg-layer-2); padding: 12px 14px;
+}
+.ask-card .q { font-weight: 500; margin-bottom: 10px; }
+.ask-card .q .tag { margin-right: 8px; }
+.ask-opts { display: flex; flex-wrap: wrap; gap: 8px; }
+.ask-opt {
+  padding: 6px 12px; border: 1px solid var(--border-l4); border-radius: 999px;
+  color: var(--text-2); font-size: 13px;
+  transition: all var(--dur) var(--ease);
+}
+.ask-opt:hover { border-color: var(--accent); color: var(--accent); }
+.ask-card[data-answered] .ask-opt { pointer-events: none; opacity: 0.55; }
+.ask-card[data-answered] .ask-opt[aria-pressed="true"] {
+  opacity: 1; border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
+}
+.ask-card .done-hint { display: none; margin-top: 8px; font-size: 12px; color: var(--text-3); }
+.ask-card[data-answered] .done-hint { display: block; }
+
+/* Composer */
+.composer { padding: 8px 16px 10px; }
+.composer-inner {
+  max-width: 760px; margin: 0 auto;
+  border: 1px solid var(--border-l4); border-radius: var(--r-lg);
+  background: var(--bg-layer-2); padding: 10px 12px 8px;
+  transition: border-color var(--dur) var(--ease);
+}
+.composer-inner:focus-within { border-color: var(--accent); }
+.composer textarea {
+  display: block; width: 100%; border: none; background: none; resize: none;
+  font: inherit; color: var(--text-1); max-height: 160px; outline: none; padding: 2px;
+}
+.composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.select-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px;
+  border: 1px solid var(--border-l2); border-radius: 999px; background: var(--bg-layer-1);
+  color: var(--text-2); font-size: 12px;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.select-chip:hover { border-color: var(--text-3); color: var(--text-1); }
+.select-chip .icon { width: 13px; height: 13px; }
+.composer-bar .spacer { flex: 1; }
+.send-btn {
+  width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--accent); color: var(--on-accent);
+  transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+.send-btn:hover { background: var(--accent-hover); }
+.send-btn:disabled { opacity: 0.4; cursor: default; }
+.send-btn.stop { background: var(--red); color: #fff; }
+.status-line {
+  max-width: 760px; margin: 6px auto 0; display: flex; gap: 14px;
+  font-size: 12px; color: var(--text-3);
+}
+.status-line .grow { flex: 1; }
+.ctx-bar { width: 72px; height: 4px; border-radius: 2px; background: var(--bg-layer-3); display: inline-block; vertical-align: middle; margin-left: 6px; overflow: hidden; }
+.ctx-bar i { display: block; height: 100%; width: 38%; background: var(--accent); border-radius: 2px; }
+
+/* --- 右栏：任务 / 子代理 / 后台任务（>=1280px 常驻，否则 drawer） --- */
+.right {
+  width: clamp(340px, 32vw, 480px); flex: none; display: flex; flex-direction: column;
+  background: var(--bg-layer-2); border-left: 1px solid var(--border-l2);
+}
+.tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--border-l2); }
+.tab {
+  padding: 7px 12px; font-size: 13px; color: var(--text-2); border-radius: var(--r-sm) var(--r-sm) 0 0;
+  border-bottom: 2px solid transparent;
+  transition: color var(--dur) var(--ease);
+}
+.tab:hover { color: var(--text-1); }
+.tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+.panel-body { flex: 1; overflow-y: auto; padding: 12px; }
+.panel-body[hidden] { display: none; }
+.right-head {
+  display: none; align-items: center; justify-content: space-between;
+  padding: 10px 12px 0;
+}
+.item-card {
+  background: var(--bg-layer-1); border: 1px solid var(--border-l2); border-radius: var(--r-md);
+  padding: 10px 12px; margin-bottom: 8px;
+}
+.item-card .row1 { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.item-card .row1 .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-card .row2 { margin-top: 4px; font-size: 12px; color: var(--text-3); }
+.item-card .row2 code { font-family: var(--font-code); font-size: 11.5px; }
+.task-check {
+  display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; color: var(--text-2);
+}
+.task-check .icon { width: 16px; height: 16px; margin-top: 3px; }
+.task-check.done { color: var(--text-3); text-decoration: line-through; }
+.task-check.done .icon { color: var(--green); }
+.task-check.active { color: var(--text-1); }
+.task-check.active .icon { color: var(--amber); }
+
+/* drawer（移动端侧栏 / <1280px 右栏） */
+.scrim {
+  position: fixed; inset: 0; background: var(--scrim); z-index: 40;
+  opacity: 0; pointer-events: none; transition: opacity var(--dur) var(--ease);
+}
+.scrim[data-on="true"] { opacity: 1; pointer-events: auto; }
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0; z-index: 50; width: 280px;
+    transform: translateX(-100%); visibility: hidden; pointer-events: none;
+    transition: transform var(--dur) var(--ease), visibility 0s var(--dur);
+    box-shadow: var(--shadow-pop);
+  }
+  .sidebar[data-open="true"] {
+    transform: none; visibility: visible; pointer-events: auto; transition-delay: 0s;
+  }
+  .main { min-width: 0; }
+}
+@media (max-width: 1279px) {
+  .right {
+    position: fixed; inset: 0 0 0 auto; z-index: 50; width: min(360px, 88vw);
+    transform: translateX(100%); visibility: hidden; pointer-events: none;
+    transition: transform var(--dur) var(--ease), visibility 0s var(--dur);
+    box-shadow: var(--shadow-pop); border-left: 1px solid var(--border-l2);
+  }
+  .right[data-open="true"] {
+    transform: none; visibility: visible; pointer-events: auto; transition-delay: 0s;
+  }
+  .right-head { display: flex; }
+}
+@media (max-width: 1023px) {
+  .icon-btn, .send-btn, .rail-dot { width: 44px; height: 44px; }
+  .new-chat, .session-item, .tool-head, .ask-opt, .select-chip, .tab { min-height: 44px; }
+}
+@media (min-width: 1280px) {
+  .right { transform: none !important; }
+  .right[data-collapsed="true"] { display: none; }
+}
+
+/* 流式光标与旋转 */
+.caret::after {
+  content: ""; display: inline-block; width: 7px; height: 14px; margin-left: 2px;
+  background: var(--accent); vertical-align: -2px; animation: blink 0.9s steps(2) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+.spin { animation: rot 1s linear infinite; }
+@keyframes rot { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body data-theme="light">
+
+<!-- SVG 图标 sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-pie" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10h-9a1 1 0 0 1-1-1V2zm2 0a10 10 0 0 1 8 8h-8V2z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" d="M15 4v16"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 20h8m-4-4v4"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-tool" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3 3.7-3.7z"/></symbol>
+    <symbol id="i-brain" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M9.5 3A3 3 0 0 0 6.5 6c-1.9.5-3 2-3 3.8 0 1.2.5 2.2 1.3 2.9A3.5 3.5 0 0 0 7 19.5c.6 1 1.7 1.5 2.9 1.3M14.5 3A3 3 0 0 1 17.5 6c1.9.5 3 2 3 3.8 0 1.2-.5 2.2-1.3 2.9a3.5 3.5 0 0 1-2.2 6.8c-.6 1-1.7 1.5-2.9 1.3M12 3v18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="m4 12.5 5 5L20 6.5"/></symbol>
+    <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-spin" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" d="M12 3a9 9 0 1 1-9 9"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-agent" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 20c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5"/></symbol>
+    <symbol id="i-job" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="i-task" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8.5 12.5 2.5 2.5 4.5-5"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <!-- 左栏 -->
+  <aside class="sidebar" id="sidebar" aria-label="会话列表">
+    <div class="brand">
+      <span class="logo"><svg class="icon"><use href="#i-pie"/></svg></span>
+      <span>pie</span>
+    </div>
+    <button class="new-chat" id="newChat">
+      <svg class="icon" style="width:15px;height:15px"><use href="#i-plus"/></svg>
+      新会话
+    </button>
+    <nav class="session-list" id="sessionList" aria-label="历史会话"></nav>
+    <!-- rail 模式内容 -->
+    <div class="rail-only" aria-hidden="false">
+      <button class="icon-btn" id="railNew" aria-label="新会话"><svg class="icon"><use href="#i-plus"/></svg></button>
+      <div id="railDots" style="display:flex;flex-direction:column;gap:4px;align-items:center"></div>
+      <div class="rail-spacer"></div>
+    </div>
+    <div class="sidebar-foot">
+      <span class="foot-label">本地原型 · 未连接 RPC</span>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题（当前：浅色）" title="主题：浅色">
+        <svg class="icon" id="themeIcon"><use href="#i-sun"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- 中央对话 -->
+  <main class="main">
+    <header class="chat-head">
+      <button class="icon-btn mobile-only" id="openSidebar" aria-label="打开会话列表" aria-controls="sidebar" aria-expanded="false">
+        <svg class="icon"><use href="#i-menu"/></svg>
+      </button>
+      <h1 id="chatTitle">修复登录页表单校验</h1>
+      <button class="icon-btn" id="openRight" aria-label="关闭任务面板" aria-controls="rightPanel" aria-expanded="true">
+        <svg class="icon"><use href="#i-panel"/></svg>
+      </button>
+    </header>
+
+    <div class="chat-body" id="chatBody" aria-live="polite">
+      <div class="thread" id="thread"></div>
+    </div>
+
+    <footer class="composer">
+      <div class="composer-inner">
+        <textarea id="input" rows="2" placeholder="向 pie 提问…（Enter 发送，Shift+Enter 换行）" aria-label="消息输入框"></textarea>
+        <div class="composer-bar">
+          <button class="select-chip" id="modelChip" aria-label="切换模型（当前：pi-large）">
+            <svg class="icon"><use href="#i-pie"/></svg><span id="modelName">pi-large</span>
+            <svg class="icon"><use href="#i-chev"/></svg>
+          </button>
+          <button class="select-chip" id="thinkChip" aria-label="切换思考强度（当前：中）">
+            <svg class="icon"><use href="#i-brain"/></svg><span id="thinkName">思考：中</span>
+          </button>
+          <span class="spacer"></span>
+          <button class="send-btn" id="sendBtn" aria-label="发送" disabled>
+            <svg class="icon" id="sendIcon"><use href="#i-send"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="status-line">
+        <span id="usageText">用量：12,480 tokens</span>
+        <span class="grow"></span>
+        <span>上下文<span class="ctx-bar" role="img" aria-label="上下文已使用 38%"><i></i></span> 38%</span>
+      </div>
+    </footer>
+  </main>
+
+  <!-- 右栏 -->
+  <aside class="right" id="rightPanel" aria-label="任务与子代理面板">
+    <div class="right-head">
+      <strong style="font-size:14px">工作区</strong>
+      <button class="icon-btn" id="closeRight" aria-label="关闭任务面板">
+        <svg class="icon"><use href="#i-x"/></svg>
+      </button>
+    </div>
+    <div class="tabs" role="tablist" aria-label="右侧面板标签">
+      <button class="tab" role="tab" id="tab-tasks" aria-selected="true" aria-controls="panel-tasks" data-tab="tasks">
+        <svg class="icon" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><use href="#i-task"/></svg>任务
+      </button>
+      <button class="tab" role="tab" id="tab-agents" aria-selected="false" aria-controls="panel-agents" data-tab="agents" tabindex="-1">
+        <svg class="icon" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><use href="#i-agent"/></svg>子代理
+      </button>
+      <button class="tab" role="tab" id="tab-jobs" aria-selected="false" aria-controls="panel-jobs" data-tab="jobs" tabindex="-1">
+        <svg class="icon" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><use href="#i-job"/></svg>后台任务
+      </button>
+    </div>
+
+    <div class="panel-body" role="tabpanel" id="panel-tasks" aria-labelledby="tab-tasks">
+      <div class="item-card">
+        <div class="row1"><span class="t">修复登录页表单校验</span><span class="badge run">进行中 3/5</span></div>
+        <div class="row2">
+          <div class="task-check done"><svg class="icon"><use href="#i-check"/></svg>定位校验失败原因（blur 时机）</div>
+          <div class="task-check done"><svg class="icon"><use href="#i-check"/></svg>阅读 <code>login-form.ts</code> 与相关测试</div>
+          <div class="task-check active"><svg class="icon spin"><use href="#i-spin"/></svg>修改校验逻辑并补充错误提示</div>
+          <div class="task-check"><svg class="icon"><use href="#i-circle"/></svg>运行 login 相关测试</div>
+          <div class="task-check"><svg class="icon"><use href="#i-circle"/></svg>复查 diff 并总结</div>
+        </div>
+      </div>
+      <div class="item-card">
+        <div class="row1"><span class="t">为设置页补充空状态</span><span class="badge ok">已完成</span></div>
+        <div class="row2">5 项全部完成 · 耗时 3 分 12 秒</div>
+      </div>
+    </div>
+
+    <div class="panel-body" role="tabpanel" id="panel-agents" aria-labelledby="tab-agents" hidden>
+      <div class="item-card">
+        <div class="row1"><span class="t">explore · 搜索校验相关调用方</span><span class="badge ok">完成</span></div>
+        <div class="row2">读取 14 个文件 · 输出：3 处调用点需要同步更新</div>
+      </div>
+      <div class="item-card">
+        <div class="row1"><span class="t">review · 复查校验 diff</span><span class="badge run">运行中</span></div>
+        <div class="row2">已运行 46 秒 · 当前步骤：对比测试快照</div>
+      </div>
+      <div class="item-card">
+        <div class="row1"><span class="t">test-runner · login 测试子集</span><span class="badge err">失败</span></div>
+        <div class="row2"><code>login-form.test.ts</code> · 2 个断言未通过，已回报主会话</div>
+      </div>
+    </div>
+
+    <div class="panel-body" role="tabpanel" id="panel-jobs" aria-labelledby="tab-jobs" hidden>
+      <div class="item-card">
+        <div class="row1"><span class="t">vitest --watch login</span><span class="badge run">运行中</span></div>
+        <div class="row2"><code>bg · 已运行 2 分 04 秒</code> · 最近输出：14 passed</div>
+      </div>
+      <div class="item-card">
+        <div class="row1"><span class="t">tsc --noEmit</span><span class="badge ok">完成</span></div>
+        <div class="row2">退出码 0 · 耗时 18 秒</div>
+      </div>
+      <div class="item-card">
+        <div class="row1"><span class="t">npm run lint</span><span class="badge ok">完成</span></div>
+        <div class="row2">退出码 0 · 耗时 9 秒 · 0 警告</div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="scrim" id="scrim"></div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var esc = function (s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
+  var icon = function (name, cls) {
+    return '<svg class="icon ' + (cls || '') + '" aria-hidden="true"><use href="#i-' + name + '"/></svg>';
+  };
+
+  /* ===== 模拟数据 ===== */
+  function toolCard(name, arg, status, output, open) {
+    var badgeCls = status === '完成' ? 'ok' : status === '失败' ? 'err' : 'run';
+    return '<div class="tool-card" data-open="' + (open ? 'true' : 'false') + '">' +
+      '<button class="tool-head" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+      icon('tool') + '<span class="name">' + esc(name) + '</span>' +
+      '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">' + esc(arg) + '</span>' +
+      '<span class="badge ' + badgeCls + '">' + status + '</span>' +
+      '<svg class="icon chev" aria-hidden="true"><use href="#i-chev"/></svg></button>' +
+      '<div class="tool-detail"><pre>' + esc(output) + '</pre></div></div>';
+  }
+  function thinking(text) {
+    return '<div class="thinking"><div class="label">' + icon('brain') + '思考过程</div><div>' + esc(text) + '</div></div>';
+  }
+  function agentMsg(parts) {
+    return '<div class="msg-agent">' + parts.join('') + '</div>';
+  }
+  function userMsg(text) {
+    return '<div class="msg-user">' + esc(text) + '</div>';
+  }
+  var ASK_HTML =
+    '<div class="ask-card" role="group" aria-label="扩展提问">' +
+    '<div class="q"><span class="badge info tag">扩展提问</span>校验失败时要立即聚焦到出错输入框吗？</div>' +
+    '<div class="ask-opts">' +
+    '<button class="ask-opt" aria-pressed="false">立即聚焦（推荐）</button>' +
+    '<button class="ask-opt" aria-pressed="false">仅展示错误文案</button>' +
+    '<button class="ask-opt" aria-pressed="false">保持现状</button>' +
+    '</div><div class="done-hint">已回复（原型仅演示选择态，不会真正提交）</div></div>';
+
+  var sessions = [
+    {
+      id: 's1', title: '修复登录页表单校验', group: '今天',
+      messages: [
+        userMsg('登录页邮箱输错后，错误提示要提交才出现，帮我改成失焦就校验。'),
+        agentMsg([
+          thinking('用户要的是 blur 时触发校验而不是 submit。先看 login-form.ts 里校验绑定在哪个事件上，再看测试怎么写，避免改完破坏现有用例。'),
+          toolCard('read', 'src/pages/login/login-form.ts', '完成',
+            'export function bindValidation(form: HTMLFormElement) {\n  form.addEventListener("submit", (e) => {\n    const email = form.querySelector<HTMLInputElement>("#email");\n    if (!email || !isEmail(email.value)) {\n      e.preventDefault();\n      showError(email, "请输入有效的邮箱地址");\n    }\n  });\n}'),
+          toolCard('bash', './test.sh login-form', '完成', 'login-form.test.ts\n  ✓ 提交时校验邮箱格式 (42ms)\n  ✓ 密码为空时阻止提交 (31ms)\n\n2 passed · 0 failed'),
+          ASK_HTML,
+          toolCard('edit', 'src/pages/login/login-form.ts', '完成',
+            ' form.addEventListener("submit", (e) => { ... });\n+email?.addEventListener("blur", () => {\n+  if (email.value && !isEmail(email.value)) showError(email, "请输入有效的邮箱地址");\n+  else clearError(email);\n+});'),
+          '<div class="body">已改为失焦即校验：给 <code>#email</code> 增加 <code>blur</code> 监听，输入非空且格式非法时立即提示，恢复合法后清除。提交校验保留作为兜底。接下来我会补上对应的测试用例。</div>'
+        ])
+      ]
+    },
+    {
+      id: 's2', title: '解释流式输出的背压处理', group: '今天',
+      messages: [
+        userMsg('RPC 流式推送太快时，前端队列会丢消息吗？'),
+        agentMsg([
+          '<div class="body">不会丢，但会积压。当前实现里事件先入内存队列、渲染层按帧消费：如果生产速度持续高于消费速度，队列长度会增长，表现为 UI 延迟而不是丢失。真正需要防的是长会话下的内存占用——超过阈值时应合并相邻的文本增量事件。</div>'
+        ])
+      ]
+    },
+    { id: 's3', title: '给 CLI 加 --json 输出', group: '昨天', messages: [
+      userMsg('想让 stats 命令支持机器可读输出。'),
+      agentMsg(['<div class="body">可以给 <code>stats</code> 加 <code>--json</code> 标志：置位时走 <code>JSON.stringify</code> 单行输出，人类可读路径保持不变。</div>'])
+    ] }
+  ];
+  var activeId = 's1';
+  var streaming = false;
+  var streamTimer = null;
+
+  /* ===== 渲染：会话列表 ===== */
+  var sessionList = $('sessionList');
+  var railDots = $('railDots');
+  function renderSessions() {
+    var html = '', rail = '', lastGroup = '';
+    sessions.forEach(function (s) {
+      if (s.group !== lastGroup) { lastGroup = s.group; html += '<div class="session-group">' + esc(s.group) + '</div>'; }
+      html += '<button class="session-item" data-id="' + s.id + '" aria-current="' + (s.id === activeId) + '">' +
+        '<span class="t">' + esc(s.title) + '</span></button>';
+      rail += '<button class="rail-dot" data-id="' + s.id + '" aria-current="' + (s.id === activeId) + '" aria-label="切换到会话：' + esc(s.title) + '">' +
+        esc(s.title.charAt(0)) + '</button>';
+    });
+    sessionList.innerHTML = html;
+    railDots.innerHTML = rail;
+  }
+
+  /* ===== 渲染：消息 ===== */
+  var thread = $('thread');
+  var chatBody = $('chatBody');
+  function activeSession() { return sessions.filter(function (s) { return s.id === activeId; })[0]; }
+  function renderMessages() {
+    var s = activeSession();
+    $('chatTitle').textContent = s.title;
+    if (!s.messages.length) {
+      thread.innerHTML = '<div class="empty-state"><div class="big">开始一个新会话</div><div>在下方输入你的问题，pie 会调用工具来完成它。</div></div>';
+    } else {
+      thread.innerHTML = s.messages.join('');
+    }
+    chatBody.scrollTop = chatBody.scrollHeight;
+  }
+  function scrollBottom() { chatBody.scrollTop = chatBody.scrollHeight; }
+
+  /* ===== 会话切换 / 新建 ===== */
+  function switchSession(id) {
+    if (streaming) stopStream();
+    activeId = id;
+    renderSessions();
+    renderMessages();
+    closeDrawers();
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('.session-item, .rail-dot');
+    if (btn && btn.dataset.id) switchSession(btn.dataset.id);
+  });
+  var newCount = 0;
+  function newSession() {
+    if (streaming) stopStream();
+    newCount += 1;
+    var s = { id: 'n' + newCount, title: '新会话', group: '今天', messages: [] };
+    sessions.unshift(s);
+    switchSession(s.id);
+    input.focus();
+  }
+  $('newChat').addEventListener('click', newSession);
+  $('railNew').addEventListener('click', newSession);
+
+  /* ===== 工具卡展开/收起 & 提问卡（事件委托，覆盖动态插入的节点） ===== */
+  thread.addEventListener('click', function (e) {
+    var head = e.target.closest('.tool-head');
+    if (head) {
+      var card = head.parentElement;
+      var open = card.dataset.open === 'true';
+      card.dataset.open = String(!open);
+      head.setAttribute('aria-expanded', String(!open));
+      return;
+    }
+    var opt = e.target.closest('.ask-opt');
+    if (opt) {
+      var card2 = opt.closest('.ask-card');
+      card2.setAttribute('data-answered', '');
+      card2.querySelectorAll('.ask-opt').forEach(function (b) { b.setAttribute('aria-pressed', 'false'); });
+      opt.setAttribute('aria-pressed', 'true');
+    }
+  });
+
+  /* ===== 右侧 Tabs ===== */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+  function activateTab(tab, moveFocus) {
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      $('panel-' + t.dataset.tab).hidden = !on;
+    });
+    if (moveFocus) tab.focus();
+  }
+  tabs.forEach(function (tab, index) {
+    tab.addEventListener('click', function () { activateTab(tab, false); });
+    tab.addEventListener('keydown', function (e) {
+      var next = index;
+      if (e.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = tabs.length - 1;
+      else return;
+      e.preventDefault();
+      activateTab(tabs[next], true);
+    });
+  });
+
+  /* ===== Drawer 与 Escape ===== */
+  var sidebar = $('sidebar');
+  var rightPanel = $('rightPanel');
+  var scrim = $('scrim');
+  function isMobileSidebar() { return window.matchMedia('(max-width: 767px)').matches; }
+  function isRightDrawer() { return window.matchMedia('(max-width: 1279px)').matches; }
+  var rightTrigger = $('openRight');
+  function syncScrim() {
+    var sidebarOpen = isMobileSidebar() && sidebar.dataset.open === 'true';
+    var on = sidebarOpen || (isRightDrawer() && rightPanel.dataset.open === 'true');
+    scrim.dataset.on = String(on);
+    $('openSidebar').setAttribute('aria-expanded', String(sidebarOpen));
+  }
+  function syncRightTrigger() {
+    var open = isRightDrawer() ? rightPanel.dataset.open === 'true' : rightPanel.dataset.collapsed !== 'true';
+    rightTrigger.setAttribute('aria-expanded', String(open));
+    rightTrigger.setAttribute('aria-label', open ? '关闭任务面板' : '打开任务面板');
+  }
+  function closeDrawers() {
+    var focusTarget = null;
+    if (isRightDrawer() && rightPanel.contains(document.activeElement)) focusTarget = rightTrigger;
+    if (isMobileSidebar() && sidebar.contains(document.activeElement)) focusTarget = $('openSidebar');
+    sidebar.dataset.open = 'false';
+    rightPanel.dataset.open = 'false';
+    syncScrim();
+    syncRightTrigger();
+    if (focusTarget) focusTarget.focus();
+  }
+  $('openSidebar').addEventListener('click', function () {
+    sidebar.dataset.open = 'true'; syncScrim();
+    sidebar.querySelector('.new-chat').focus();
+  });
+  rightTrigger.addEventListener('click', function () {
+    if (isRightDrawer()) {
+      rightPanel.dataset.open = 'true';
+      syncScrim();
+      $('closeRight').focus();
+    } else {
+      rightPanel.dataset.collapsed = String(rightPanel.dataset.collapsed !== 'true');
+    }
+    syncRightTrigger();
+  });
+  $('closeRight').addEventListener('click', closeDrawers);
+  scrim.addEventListener('click', closeDrawers);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeDrawers();
+  });
+  window.addEventListener('resize', function () { syncScrim(); syncRightTrigger(); });
+  syncRightTrigger();
+
+  /* ===== 主题切换：浅色 → 深色 → 跟随系统 ===== */
+  var themeBtn = $('themeBtn');
+  var themes = [
+    { key: 'light', label: '浅色', icon: 'i-sun' },
+    { key: 'dark', label: '深色', icon: 'i-moon' },
+    { key: 'system', label: '跟随系统', icon: 'i-monitor' }
+  ];
+  var themeIdx = 0;
+  var sysDark = window.matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    var t = themes[themeIdx];
+    var dark = t.key === 'dark' || (t.key === 'system' && sysDark.matches);
+    document.body.dataset.theme = dark ? 'dark' : 'light';
+    $('themeIcon').innerHTML = '<use href="#' + t.icon + '"/>';
+    themeBtn.setAttribute('aria-label', '切换主题（当前：' + t.label + '）');
+    themeBtn.title = '主题：' + t.label;
+  }
+  themeBtn.addEventListener('click', function () {
+    themeIdx = (themeIdx + 1) % themes.length;
+    applyTheme();
+  });
+  sysDark.addEventListener('change', applyTheme);
+  applyTheme();
+
+  /* ===== 模型 / 思考强度（循环演示，无下拉页） ===== */
+  var models = ['pi-large', 'pi-medium', 'pi-code'];
+  var thinkLevels = ['关', '低', '中', '高'];
+  var mi = 0, ti = 2;
+  $('modelChip').addEventListener('click', function () {
+    mi = (mi + 1) % models.length;
+    $('modelName').textContent = models[mi];
+    $('modelChip').setAttribute('aria-label', '切换模型（当前：' + models[mi] + '）');
+  });
+  $('thinkChip').addEventListener('click', function () {
+    ti = (ti + 1) % thinkLevels.length;
+    $('thinkName').textContent = '思考：' + thinkLevels[ti];
+    $('thinkChip').setAttribute('aria-label', '切换思考强度（当前：' + thinkLevels[ti] + '）');
+  });
+
+  /* ===== Composer：发送 / 停止 / 本地模拟流式回复 ===== */
+  var input = $('input');
+  var sendBtn = $('sendBtn');
+  var sendIcon = $('sendIcon');
+  var REPLY = '好的，我来处理。先读一下相关文件确认现状，再给出修改。这个回复是本地模拟的流式输出：接 RPC 后，这里会逐段推送真实内容，右侧任务与后台任务面板也会同步更新状态。';
+
+  function syncSendBtn() {
+    var hasText = input.value.trim().length > 0;
+    if (streaming) {
+      sendBtn.disabled = false;
+      sendBtn.classList.add('stop');
+      sendBtn.setAttribute('aria-label', '停止生成');
+      sendIcon.innerHTML = '<use href="#i-stop"/>';
+    } else {
+      sendBtn.classList.remove('stop');
+      sendBtn.disabled = !hasText;
+      sendBtn.setAttribute('aria-label', '发送');
+      sendIcon.innerHTML = '<use href="#i-send"/>';
+    }
+  }
+  input.addEventListener('input', syncSendBtn);
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!sendBtn.disabled) send();
+    }
+  });
+  sendBtn.addEventListener('click', function () {
+    if (streaming) stopStream(); else send();
+  });
+
+  function send() {
+    var text = input.value.trim();
+    if (!text || streaming) return;
+    var s = activeSession();
+    if (s.title === '新会话') {
+      s.title = text.length > 16 ? text.slice(0, 16) + '…' : text;
+      $('chatTitle').textContent = s.title;
+      renderSessions();
+    }
+    if (!s.messages.length) thread.innerHTML = '';
+    s.messages.push(userMsg(text));
+    thread.insertAdjacentHTML('beforeend', userMsg(text));
+    input.value = '';
+    syncSendBtn();
+    startStream(s);
+  }
+
+  var streamState = null;
+  function startStream(s) {
+    streaming = true;
+    syncSendBtn();
+    $('usageText').textContent = '用量：生成中…';
+    var wrap = document.createElement('div');
+    wrap.className = 'msg-agent';
+    wrap.innerHTML = thinking('正在理解你的请求…') +
+      toolCard('read', 'src/app.ts', '运行中', '（等待输出…）') +
+      '<div class="body caret"></div>';
+    thread.appendChild(wrap);
+    scrollBottom();
+    var body = wrap.querySelector('.body');
+    var i = 0;
+    streamState = { wrap: wrap, body: body };
+    if (reduced) { i = REPLY.length; }
+    streamTimer = setInterval(function () {
+      i = Math.min(REPLY.length, i + 3);
+      body.textContent = REPLY.slice(0, i);
+      scrollBottom();
+      if (i >= REPLY.length) finishStream(s);
+    }, 40);
+  }
+  function finishStream(s) {
+    clearInterval(streamTimer);
+    streamTimer = null;
+    streaming = false;
+    var wrap = streamState.wrap;
+    wrap.querySelector('.thinking div:last-child').textContent = '已完成请求理解与工具读取（模拟）。';
+    wrap.querySelector('.tool-card').dataset.open = 'false';
+    var head = wrap.querySelector('.tool-head');
+    head.setAttribute('aria-expanded', 'false');
+    head.querySelector('.badge').className = 'badge ok';
+    head.querySelector('.badge').textContent = '完成';
+    wrap.querySelector('.tool-detail pre').textContent = 'export function bootstrap() {\n  const app = createApp();\n  app.mount("#root");\n}';
+    streamState.body.classList.remove('caret');
+    s.messages.push(agentMsg([wrap.innerHTML]));
+    $('usageText').textContent = '用量：' + (12480 + 640 + Math.floor(Math.random() * 300)).toLocaleString() + ' tokens';
+    streamState = null;
+    syncSendBtn();
+  }
+  function stopStream() {
+    if (!streaming) return;
+    var s = activeSession();
+    clearInterval(streamTimer);
+    streamTimer = null;
+    streaming = false;
+    streamState.body.classList.remove('caret');
+    streamState.body.textContent += '（已手动停止）';
+    var badge = streamState.wrap.querySelector('.tool-head .badge');
+    badge.className = 'badge info';
+    badge.textContent = '已停止';
+    streamState.wrap.querySelector('.thinking div:last-child').textContent = '生成已手动停止。';
+    s.messages.push(agentMsg([streamState.wrap.innerHTML]));
+    streamState = null;
+    $('usageText').textContent = '用量：12,480 tokens';
+    syncSendBtn();
+  }
+
+  renderSessions();
+  renderMessages();
+  syncSendBtn();
+})();
+</script>
+</body>
+</html>
