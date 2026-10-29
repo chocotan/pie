@@ -2,6 +2,8 @@
 
 pie 的浏览器界面：多工作区会话管理 + 流式对话 + 工具调用可视化。React 18 + CSS Modules + Vite，本地 Node host 通过 RPC 驱动 `packages/coding-agent`。
 
+`prototype.html` 是已确认的静态设计原型（单文件、可直接打开），不是运行中的应用；正式入口见下方启动方式。
+
 ## 启动
 
 ```sh

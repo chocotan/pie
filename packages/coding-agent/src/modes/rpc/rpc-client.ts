@@ -13,7 +13,14 @@ import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { JsonAgentSessionEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
-import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
+import type {
+	RpcCommand,
+	RpcExtensionUIRequest,
+	RpcExtensionUIResponse,
+	RpcResponse,
+	RpcSessionState,
+	RpcSlashCommand,
+} from "./rpc-types.ts";
 
 // ============================================================================
 // Types
@@ -47,7 +54,8 @@ export interface ModelInfo {
 	reasoning: boolean;
 }
 
-export type RpcEventListener = (event: JsonAgentSessionEvent) => void;
+export type RpcClientEvent = JsonAgentSessionEvent | RpcExtensionUIRequest;
+export type RpcEventListener = (event: RpcClientEvent) => void;
 
 // ============================================================================
 // RPC Client
@@ -460,6 +468,11 @@ export class RpcClient {
 		return this.getData<{ commands: RpcSlashCommand[] }>(response).commands;
 	}
 
+	/** Answer an extension dialog request received through onEvent(). */
+	respondExtensionUI(response: RpcExtensionUIResponse): void {
+		this.writeRecord(response);
+	}
+
 	// =========================================================================
 	// Helpers
 	// =========================================================================
@@ -497,7 +510,9 @@ export class RpcClient {
 			}, timeout);
 
 			const unsubscribe = this.onEvent((event) => {
-				events.push(event);
+				if (event.type !== "extension_ui_request") {
+					events.push(event);
+				}
 				if (event.type === "agent_settled") {
 					clearTimeout(timer);
 					unsubscribe();
@@ -535,7 +550,7 @@ export class RpcClient {
 			// Otherwise it's an event. Iterate a snapshot so listeners that unsubscribe during dispatch
 			// do not cause later listeners to miss this event.
 			for (const listener of [...this.eventListeners]) {
-				listener(data as JsonAgentSessionEvent);
+				listener(data as RpcClientEvent);
 			}
 		} catch {
 			// Ignore non-JSON lines
@@ -554,25 +569,6 @@ export class RpcClient {
 	}
 
 	private async send(command: RpcCommandBody): Promise<RpcResponse> {
-		const childProcess = this.process;
-		const stdin = childProcess?.stdin;
-		if (!childProcess || !stdin) {
-			throw new Error("Client not started");
-		}
-		if (this.exitError) {
-			throw this.exitError;
-		}
-		if (childProcess.exitCode !== null) {
-			const error = this.createProcessExitError(childProcess.exitCode, childProcess.signalCode);
-			this.exitError = error;
-			throw error;
-		}
-		if (stdin.destroyed || !stdin.writable) {
-			const error = new Error(`Agent process stdin is not writable. Stderr: ${this.stderr}`);
-			this.exitError = error;
-			throw error;
-		}
-
 		const id = `req_${++this.requestId}`;
 		const fullCommand = { ...command, id } as RpcCommand;
 
@@ -594,7 +590,7 @@ export class RpcClient {
 			});
 
 			try {
-				stdin.write(serializeJsonLine(fullCommand));
+				this.writeRecord(fullCommand);
 			} catch (error: unknown) {
 				const writeError = error instanceof Error ? error : new Error(String(error));
 				const pending = this.pendingRequests.get(id);
@@ -602,6 +598,28 @@ export class RpcClient {
 				pending?.reject(writeError);
 			}
 		});
+	}
+
+	private writeRecord(record: RpcCommand | RpcExtensionUIResponse): void {
+		const childProcess = this.process;
+		const stdin = childProcess?.stdin;
+		if (!childProcess || !stdin) {
+			throw new Error("Client not started");
+		}
+		if (this.exitError) {
+			throw this.exitError;
+		}
+		if (childProcess.exitCode !== null) {
+			const error = this.createProcessExitError(childProcess.exitCode, childProcess.signalCode);
+			this.exitError = error;
+			throw error;
+		}
+		if (stdin.destroyed || !stdin.writable) {
+			const error = new Error(`Agent process stdin is not writable. Stderr: ${this.stderr}`);
+			this.exitError = error;
+			throw error;
+		}
+		stdin.write(serializeJsonLine(record));
 	}
 
 	private getData<T>(response: RpcResponse): T {

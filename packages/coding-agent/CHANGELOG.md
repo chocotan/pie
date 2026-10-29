@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added extension UI requests to `RpcClient.onEvent()` and `RpcClient.respondExtensionUI()` for RPC hosts that implement custom dialog interfaces.
 - Added **Watchdog model** to `/settings`, persisted as `watchdogModel` in `settings.json` and applied to the next private decision. It overrides the optional `model` in `pi-continue-watchdog.json`; both accept a thinking-level suffix and default to the main session model when unset.
 - Subagent panel rows and completion notifications show current/max turns before elapsed time.
 - Added a floating task-details view when opening a Todo item in the TUI.

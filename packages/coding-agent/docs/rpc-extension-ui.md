@@ -171,7 +171,7 @@ Set the text in the input editor. Fire-and-forget.
 
 ## Responses to Pi
 
-Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request.
+Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request. TypeScript clients receive requests through `RpcClient.onEvent()` and answer them with `RpcClient.respondExtensionUI()`.
 
 ### Value response (select, input, editor)
 
