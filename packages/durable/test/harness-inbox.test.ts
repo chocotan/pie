@@ -14,7 +14,6 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	type Conversation,
-	defineDoc,
 	defineTool,
 	type EntryRecord,
 	GenerationTask,
@@ -35,7 +34,7 @@ import { recordUsage } from "../src/harness/usage.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, waitFor } from "./chat-support.ts";
 import { addHooks, addTool } from "./harness-support.ts";
-import { ControlledStorage, context, documentChanges, flush } from "./session-support.ts";
+import { ControlledStorage, context, documentChanges, documentValues, flush } from "./session-support.ts";
 import { aborted, type Deferred, deferred } from "./task-support.ts";
 
 const directories = new Set<string>();
@@ -191,22 +190,20 @@ describe("inbox", () => {
 		await first.reached;
 		const f1 = await root.submit({ type: "input", content: "f1" }, context);
 		const f2 = await root.submit({ type: "input", content: "f2" }, context);
-		// Occupy the line, let the answer queue its boundary commit behind it, then change the mode.
-		const held = storage.holdCommits();
-		const Marker = defineDoc<{ n: number }>({
-			checkpointWhen: () => false,
-			kind: "test.marker",
-			version: 1,
-			scope: "session",
-			initial: () => ({ n: 0 }),
-		});
-		const occupying = root.commit(async (tx) => void (await tx.doc(Marker)).n++, context);
-		await held.entered;
+		// Occupy the line with a commit whose callback waits, let the answer queue its boundary commit behind it, then
+		// change the mode.
+		const entered = deferred();
+		const release = deferred();
+		const occupying = root.commit(async () => {
+			entered.resolve();
+			await release.promise;
+		}, context);
+		await entered.promise;
 		first.release();
 		await yielded.promise;
 		await flush();
 		setup.settings.followUpMode = "all";
-		held.release();
+		release.resolve();
 		await occupying;
 		const settled = await f2.wait(context);
 		expect(await status(f1)).toEqual({ ...settled, id: f1.id, entry: expect.any(Number) });
@@ -616,10 +613,13 @@ describe("inbox", () => {
 		setup.faux.setResponses([first.step, answer("second")]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		const ops: Op[][] = [];
-		harness.subscribeCommits((publication) => {
-			for (const change of documentChanges(publication)) {
-				if (change.record.kind === "pi.inbox" && change.ops.length > 0) ops.push([...change.ops]);
-			}
+		harness.observeCommits({
+			advance: (publication) => {
+				for (const change of documentValues(publication)) {
+					if (change.record.kind === "pi.inbox" && change.ops.length > 0) ops.push([...change.ops]);
+				}
+			},
+			end: () => {},
 		});
 		const input = await root.submit({ type: "input", content: "a" }, context);
 		await first.reached;
@@ -873,10 +873,13 @@ describe("inbox", () => {
 		const items = [];
 		for (const text of ["x", "y", "z"]) items.push(await root.submit({ type: "input", content: text }, context));
 		const ops: Op[][] = [];
-		harness.subscribeCommits((publication) => {
-			for (const change of documentChanges(publication)) {
-				if (change.record.kind === "pi.inbox" && change.ops.length > 0) ops.push([...change.ops]);
-			}
+		harness.observeCommits({
+			advance: (publication) => {
+				for (const change of documentValues(publication)) {
+					if (change.record.kind === "pi.inbox" && change.ops.length > 0) ops.push([...change.ops]);
+				}
+			},
+			end: () => {},
 		});
 		await items[1]!.abort(context);
 		expect(ops).toEqual([[["p", ["items"], 1, 1, []]]]);
@@ -892,26 +895,29 @@ describe("inbox", () => {
 		let inboxId: number | undefined;
 		class RecordingStorage extends MemoryStorage {
 			override async commit(
-				writes: Parameters<MemoryStorage["commit"]>[0],
-				adopt: Parameters<MemoryStorage["commit"]>[1],
+				batches: Parameters<MemoryStorage["commit"]>[0],
+				receive: Parameters<MemoryStorage["commit"]>[1],
 				callContext: Parameters<MemoryStorage["commit"]>[2],
 			) {
-				for (const write of writes) {
+				for (const write of batches.flat()) {
 					if (write.type !== "document.change" || write.id !== inboxId) continue;
 					const content = write.content;
 					const empty = content.kind === "base" && (content.value as InboxState).items.length === 0;
 					written.push({ kind: content.kind, empty });
 				}
-				return super.commit(writes, adopt, callContext);
+				return super.commit(batches, receive, callContext);
 			}
 		}
 		const setup = chatSetup();
 		const first = gated(answer("first"));
 		setup.faux.setResponses([first.step, answer("second")]);
 		const { harness, root } = await openChat(new RecordingStorage(), setup);
-		harness.subscribeCommits((publication) => {
-			for (const change of documentChanges(publication))
-				if (change.record.kind === "pi.inbox") inboxId = change.record.id;
+		harness.observeCommits({
+			advance: (publication) => {
+				for (const change of documentChanges(publication))
+					if (change.record.kind === "pi.inbox") inboxId = change.record.id;
+			},
+			end: () => {},
 		});
 		const input = await root.submit({ type: "input", content: "a" }, context);
 		await first.reached;
@@ -1074,12 +1080,15 @@ describe("usage", () => {
 		setup.faux.setResponses([answer("one"), answer("two")]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		const commits: { entries: number; ops: readonly Op[] }[] = [];
-		harness.subscribeCommits((publication) => {
-			for (const change of documentChanges(publication)) {
-				if (change.record.kind !== "pi.usage") continue;
-				const entries = publication.changes.filter((other) => other.type === "entry").length;
-				commits.push({ entries, ops: change.ops });
-			}
+		harness.observeCommits({
+			advance: (publication) => {
+				for (const change of documentValues(publication)) {
+					if (change.record.kind !== "pi.usage") continue;
+					const entries = publication.changes.filter((other) => other.type === "entry").length;
+					commits.push({ entries, ops: change.ops });
+				}
+			},
+			end: () => {},
 		});
 		await (await root.submit({ type: "input", content: "a" }, context)).wait(context);
 		await (await root.submit({ type: "input", content: "b" }, context)).wait(context);

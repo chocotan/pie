@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
+	type Component,
 	Container,
 	Markdown,
 	type MarkdownTheme,
@@ -181,13 +182,17 @@ export class AssistantMessageComponent extends Container {
 		// Clear content container
 		this.contentContainer.clear();
 
-		const hasVisibleContent = message.content.some(
-			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
-		);
-
-		if (hasVisibleContent) {
-			this.contentContainer.addChild(new Spacer(1));
-		}
+		// Spacers are added lazily, right before the next visible content block. This puts a blank
+		// line before the first visible block and after each visible thinking run that is followed
+		// by more visible content, while hidden thinking runs without a label contribute nothing.
+		let needsSpacer = true;
+		const addVisibleChild = (child: Component) => {
+			if (needsSpacer) {
+				this.contentContainer.addChild(new Spacer(1));
+				needsSpacer = false;
+			}
+			this.contentContainer.addChild(child);
+		};
 
 		// Render content in order
 		let thinkingRunIndex = 0;
@@ -196,7 +201,7 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(
+				addVisibleChild(
 					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
 						transform: createMarkdownTransform(
 							"assistant",
@@ -225,12 +230,6 @@ export class AssistantMessageComponent extends Container {
 					continue;
 				}
 
-				// Add spacing only when another visible assistant content block follows.
-				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				const hasVisibleContentAfter = message.content
-					.slice(i + 1)
-					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
-
 				const runIndex = thinkingRunIndex++;
 				const active = this.isStreaming && i === message.content.length - 1;
 				// A live run expands only in views that opt in; the transcript keeps the
@@ -239,6 +238,10 @@ export class AssistantMessageComponent extends Container {
 					this.thinkingVisibilityOverrides.get(runIndex) ??
 					this.globalThinkingVisibilityOverride ??
 					(!(active && this.autoExpandLiveThinking) && this.hideThinkingBlock);
+				// A hidden run with an empty label renders nothing, including no spacing.
+				if (hidden && !this.hiddenThinkingLabel.trim()) {
+					continue;
+				}
 				if (this.isStreaming && !this.thinkingTimes.has(runIndex))
 					this.thinkingTimes.set(runIndex, { started: Date.now() });
 				const timing = this.thinkingTimes.get(runIndex);
@@ -284,7 +287,7 @@ export class AssistantMessageComponent extends Container {
 					);
 				}
 
-				this.contentContainer.addChild(
+				addVisibleChild(
 					new MouseRegion(thinkingComponent, (event) => {
 						if (event.type === "move" || event.type === "leave") {
 							const hovered = event.type === "move" && event.button === "none" && event.y === 0;
@@ -304,11 +307,9 @@ export class AssistantMessageComponent extends Container {
 						return { handled: true };
 					}),
 				);
-				// An expanded thought keeps a separator before following content; a collapsed
-				// header is one dim line and hugs what comes next.
-				if (!hidden && hasVisibleContentAfter) {
-					this.contentContainer.addChild(new Spacer(1));
-				}
+				// Add spacing only when another visible assistant content block follows.
+				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
+				needsSpacer = true;
 			}
 		}
 
