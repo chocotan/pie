@@ -1,4 +1,6 @@
-import { type Context, copyJson, type Draft, type JsonValue } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
+import type { Draft } from "@earendil-works/chord/delta";
+import { copyJson, type JsonValue } from "@earendil-works/chord/json";
 import type {
 	Api,
 	AssistantMessage,
@@ -292,6 +294,7 @@ export const GenerationTask = defineTask<GenerationInput, GenerationCheckpoint, 
 				telemetry: context.telemetry,
 				sessionId: await ensureProviderSessionId(runtime, context),
 				...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
+				onPayload: (payload) => providerPayload(runtime, model, payload, context),
 			};
 			const message = await streamResponse(runtime, model, messages, options, attempt, context);
 			const request = { attempt, compacted, model: ref, thinkingLevel, cutoff, messages: view.messages };
@@ -662,6 +665,21 @@ export async function convertPartial(tx: Tx, live: Draft<LiveState>, conversatio
 	if (partial === undefined) return;
 	const message = copyJson(partial) as unknown as AssistantMessage;
 	await appendAssistant(tx, conversationId, { ...message, stopReason: "aborted" });
+}
+
+/** The `beforeProviderRequest` replacement chain over one provider request body. */
+async function providerPayload(
+	runtime: Runtime,
+	model: Model<Api>,
+	payload: unknown,
+	context: Context,
+): Promise<unknown> {
+	let current = payload;
+	await runtime.hooks.each("beforeProviderRequest", async (hook) => {
+		const replaced = await hook({ model, payload: current }, runtime, context);
+		if (replaced !== undefined) current = replaced.payload;
+	});
+	return current;
 }
 
 /**

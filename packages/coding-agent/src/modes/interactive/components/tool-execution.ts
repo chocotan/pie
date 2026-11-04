@@ -29,7 +29,7 @@ import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { ActivityDot } from "./activity-dot.ts";
 import { highlightHover } from "./hover-style.ts";
-import { keyHint } from "./keybinding-hints.ts";
+import { keyHint, keyText } from "./keybinding-hints.ts";
 import { formatMessageTime, TIME_RIGHT_RESERVE } from "./message-time.ts";
 import { RenderCache } from "./render-cache.ts";
 
@@ -186,6 +186,8 @@ export class ToolExecutionComponent extends Container {
 			isError: this.result?.isError ?? false,
 			durationMs: this.isPartial ? undefined : this.result?.durationMs,
 			outputPad: this.outputPad,
+			keyText,
+			keyHint,
 		};
 	}
 

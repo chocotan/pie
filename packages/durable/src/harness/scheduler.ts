@@ -1,6 +1,12 @@
-import { type Context, copyJson, type JsonValue } from "@earendil-works/chord";
-import { awaitWithContext, withAbortSignal, withoutAbortSignal, withTelemetry } from "@earendil-works/chord/context";
+import {
+	awaitWithContext,
+	type Context,
+	withAbortSignal,
+	withoutAbortSignal,
+	withTelemetry,
+} from "@earendil-works/chord/context";
 import { ownedSlice } from "@earendil-works/chord/delta";
+import { copyJson, type JsonValue } from "@earendil-works/chord/json";
 import type { Models } from "@earendil-works/pi-ai";
 import {
 	createTypedMetrics,
@@ -314,6 +320,20 @@ export class TaskScheduler {
 		ConversationId,
 		{ range: ContextRange; idleSince: number | undefined; expiresAt?: number }
 	>();
+	/**
+	 * The idle kept contexts by `idleSince`, oldest first: the expiry order, so neither an expiry nor finding the next one
+	 * scans `#contexts`. Kept sorted also when the Harness clock goes back (see `#markIdle`).
+	 */
+	readonly #idleOrder = new Map<ConversationId, number>();
+	/** At least the newest `idleSince` in `#idleOrder` (drops do not lower it): an older one added means the clock went back. */
+	#idleNewest = Number.NEGATIVE_INFINITY;
+	/**
+	 * A chain load resolved what `#idle()` treats as unknown for a live task whose chain is not loaded, which can make a
+	 * scope idle without a task change below it; the next idle check then covers every scope.
+	 */
+	#unknownsChanged = false;
+	/** Idle checks that covered every scope (`idleState`, a test diagnostic). */
+	#fullIdleChecks = 0;
 	/** Background timer for the earliest expiry of an idle context, unless the host declined it (see `#scheduleExpiry`). */
 	#expiry: { readonly at: number; readonly disarm: () => void } | undefined;
 	readonly #invocations = new Map<TaskId, Invocation>();
@@ -503,8 +523,22 @@ export class TaskScheduler {
 		const now = this.#now();
 		// A reconcile pass with work to do is work too: it finalizes held outcomes and marks cascades, at open as
 		// recovery. A process that dies before it lands must be woken again. A pass with nothing to do is not.
-		let active = this.#invocations.size > 0 || this.#reconcilingWork > 0 || this.#reconcileWork();
+		const active =
+			this.#invocations.size > 0 || this.#reconcilingWork > 0 || this.#reconcileWork() || this.#runsNow(now);
+		// The earliest sleep not yet due: only `#sleeping` holds sleeping tasks, so no pass visits every live task.
 		let at: number | undefined;
+		for (const id of this.#sleeping) {
+			const record = this.#live.get(id);
+			const state = record?.state;
+			if (state?.status === "sleeping" && !record!.abortRequested && state.until > now) {
+				at = at === undefined ? state.until : Math.min(at, state.until);
+			}
+		}
+		return at === undefined ? { active } : { active, at };
+	}
+
+	/** Whether a live task can run now: the scan `wake()` needs only while no invocation runs. */
+	#runsNow(now: number): boolean {
 		let snapshot: RegistrySnapshot | undefined;
 		let snapshotFailed = false;
 		for (const record of this.#live.values()) {
@@ -512,11 +546,7 @@ export class TaskScheduler {
 			if (state.status === "completing") continue;
 			if (state.status === "waiting" && !record.abortRequested && state.on.some((id) => this.#live.has(id)))
 				continue;
-			if (state.status === "sleeping" && !record.abortRequested && state.until > now) {
-				at = at === undefined ? state.until : Math.min(at, state.until);
-				continue;
-			}
-			if (active) continue;
+			if (state.status === "sleeping" && !record.abortRequested && state.until > now) continue;
 			// An abort invocation waits for the live work below it, which counts itself.
 			if (record.abortRequested && this.#waitingOn(record, true).length > 0) continue;
 			// A task no definition can take waits for a registry change, except an abort-marked one, which is orphaned.
@@ -531,9 +561,9 @@ export class TaskScheduler {
 				}
 				if (snapshot !== undefined && "reason" in this.#fit(record, snapshot.task(record.kind))) continue;
 			}
-			active = true;
+			return true;
 		}
-		return at === undefined ? { active } : { active, at };
+		return false;
 	}
 
 	/**
@@ -744,6 +774,8 @@ export class TaskScheduler {
 		const updated: AnyTaskRecord[] = [];
 		const failed: TaskId[] = [];
 		let changed = false;
+		// The conversations whose idleness the commit's task changes can change; undefined when a chain is not known.
+		let dirty: Set<ConversationId> | undefined = new Set();
 		// Edges first, so the tasks a commit creates in a new conversation hang from it.
 		for (const change of publication.changes) {
 			if (change.type === "conversation" && !this.#edges.has(change.value.id)) {
@@ -757,6 +789,10 @@ export class TaskScheduler {
 			const previous = this.#live.get(record.id);
 			if (failedOutcome(record) && (previous === undefined || !failedOutcome(previous))) failed.push(record.id);
 			this.#track(previous, record);
+			// Idleness counts live tasks, so only a task that became live or ended can change it. Collected before `#sweep()`,
+			// which may forget the chain of a task that ended.
+			const liveness = previous === undefined || record.state.status === "terminal";
+			if (liveness && dirty !== undefined && !this.#addScopesAbove(record, dirty)) dirty = undefined;
 			if (record.state.status === "terminal") {
 				this.#failedMigrations.delete(record.id);
 				this.#failFastChecks.delete(record.id);
@@ -817,8 +853,22 @@ export class TaskScheduler {
 		if (this.#cascadePending) this.#scheduleReconcile();
 		this.#sweep();
 		if (!changed) return;
-		this.#settleIdle();
+		this.#settleIdle(dirty);
 		this.#kick();
+	}
+
+	/**
+	 * Add the conversations above `record` to `scopes`: those whose idleness a change of it can change. False when a node
+	 * on the way up is not known. A conversation already in `scopes` has everything above it there too.
+	 */
+	#addScopesAbove(record: AnyTaskRecord, scopes: Set<ConversationId>): boolean {
+		for (const step of this.#above(parentOf(record))) {
+			if ("unknown" in step) return false;
+			if (!("conversation" in step)) continue;
+			if (scopes.has(step.conversation)) return true;
+			scopes.add(step.conversation);
+		}
+		return true;
 	}
 
 	/**
@@ -841,11 +891,11 @@ export class TaskScheduler {
 			// An idle range past its retention is dropped here too: entry-only commits do not run `#settleIdle()`, and a
 			// host may decline the expiry timer. `expiresAt` was fixed when it went idle, so no settings are read here.
 			if (kept.idleSince !== undefined && kept.expiresAt !== undefined && kept.expiresAt <= this.#now()) {
-				this.#contexts.delete(conversationId);
+				this.#dropContext(conversationId);
 				continue;
 			}
 			const range = advanceRange(kept.range, entries);
-			if (range === undefined) this.#contexts.delete(conversationId);
+			if (range === undefined) this.#dropContext(conversationId);
 			else kept.range = range;
 		}
 	}
@@ -863,50 +913,98 @@ export class TaskScheduler {
 		}
 	}
 
-	/** Resolve idle waiters, and drop each kept context whose conversation has been idle for the retention period. */
-	#settleIdle(): void {
-		for (const conversationId of this.#idleWaiters.keys()) {
-			if (this.#idle(conversationId)) this.#idleWaiters.resolve(conversationId);
-		}
+	/**
+	 * After task changes below the conversations in `scopes` (every conversation when undefined): resolve their idle
+	 * waiters and the Harness-wide ones, drop the kept contexts whose idle period passed the retention, then start or end
+	 * the idle periods of the kept contexts in `scopes`. A task change can change the idleness only of the conversations
+	 * above it, so no check visits every conversation.
+	 */
+	#settleIdle(scopes: ReadonlySet<ConversationId> | undefined): void {
+		const all = scopes === undefined || this.#unknownsChanged;
+		this.#unknownsChanged = false;
+		if (all) this.#fullIdleChecks++;
+		this.#resolveIdleWaiters(all ? undefined : scopes);
 		const now = this.#now();
 		const retention = this.#contextRetentionMs();
-		for (const [conversationId, kept] of this.#contexts) {
-			if (kept.idleSince !== undefined && now - kept.idleSince >= retention) {
-				this.#contexts.delete(conversationId);
-			} else if (!this.#idle(conversationId)) {
+		// Expired first: a context past its retention is dropped even when the same commit makes it busy again.
+		this.#expireContexts(now, retention);
+		for (const conversationId of all ? [...this.#contexts.keys()] : scopes) {
+			const kept = this.#contexts.get(conversationId);
+			if (kept === undefined) continue;
+			if (!this.#idle(conversationId)) {
+				if (kept.idleSince === undefined) continue;
 				kept.idleSince = undefined;
-			} else if (retention > 0) {
-				if (kept.idleSince === undefined) {
-					kept.idleSince = now;
-					kept.expiresAt = now + retention;
-				}
-			} else {
-				this.#contexts.delete(conversationId);
+				this.#idleOrder.delete(conversationId);
+			} else if (retention <= 0) {
+				this.#dropContext(conversationId);
+			} else if (kept.idleSince === undefined) {
+				kept.idleSince = now;
+				kept.expiresAt = now + retention;
+				this.#markIdle(conversationId, now);
 			}
 		}
 		this.#scheduleExpiry();
 	}
 
+	/** Resolve the idle waiters of the conversations in `scopes` (all when undefined) and the Harness-wide ones. */
+	#resolveIdleWaiters(scopes: ReadonlySet<ConversationId> | undefined): void {
+		for (const conversationId of this.#idleWaiters.keys()) {
+			if (conversationId !== undefined && scopes !== undefined && !scopes.has(conversationId)) continue;
+			if (this.#idle(conversationId)) this.#idleWaiters.resolve(conversationId);
+		}
+	}
+
 	/**
-	 * Run `#settleIdle()` when the earliest idle context expires, on a background timer, which never keeps the process
-	 * alive. Where the host declines it, as the default does in Cloudflare Workers, none is kept: a pending timer could
-	 * keep a Durable Object from being evicted, and eviction frees the contexts. There, task changes alone check expiry.
+	 * Drop the kept contexts idle for at least `retention`, oldest first, with the retention setting of now; with no
+	 * retention, every idle one, also those whose idle period a clock that went back makes start after now.
+	 */
+	#expireContexts(now: number, retention: number): void {
+		for (const [conversationId, idleSince] of this.#idleOrder) {
+			if (retention > 0 && now - idleSince < retention) return;
+			this.#dropContext(conversationId);
+		}
+	}
+
+	/**
+	 * Start the idle period of a kept context in the expiry order. An idle period older than the newest one kept, which
+	 * a clock that went back starts, sorts the order again, and the newest is taken from what is kept then.
+	 */
+	#markIdle(conversationId: ConversationId, idleSince: number): void {
+		this.#idleOrder.delete(conversationId);
+		this.#idleOrder.set(conversationId, idleSince);
+		if (this.#idleOrder.size === 1 || idleSince >= this.#idleNewest) {
+			this.#idleNewest = idleSince;
+			return;
+		}
+		const sorted = [...this.#idleOrder].sort((a, b) => a[1] - b[1]);
+		this.#idleOrder.clear();
+		for (const [id, since] of sorted) this.#idleOrder.set(id, since);
+		this.#idleNewest = sorted.at(-1)![1];
+	}
+
+	/** Forget a kept context, idle or not, and its place in the expiry order. */
+	#dropContext(conversationId: ConversationId): void {
+		this.#contexts.delete(conversationId);
+		this.#idleOrder.delete(conversationId);
+	}
+
+	/**
+	 * Drop the expired contexts when the earliest idle context expires, on a background timer, which never keeps the
+	 * process alive. Where the host declines it, as the default does in Cloudflare Workers, none is kept: a pending timer
+	 * could keep a Durable Object from being evicted, and eviction frees the contexts. There, task changes alone check
+	 * expiry.
 	 */
 	#scheduleExpiry(): void {
-		const retention = this.#contextRetentionMs();
-		let at: number | undefined;
-		for (const kept of this.#contexts.values()) {
-			if (kept.idleSince !== undefined && (at === undefined || kept.idleSince + retention < at)) {
-				at = kept.idleSince + retention;
-			}
-		}
+		const oldest = this.#idleOrder.values().next();
+		const at = oldest.done === true ? undefined : oldest.value + this.#contextRetentionMs();
 		if (this.#expiry !== undefined && this.#expiry.at === at) return;
 		this.#expiry?.disarm();
 		this.#expiry = undefined;
 		if (at === undefined || this.#closing) return;
 		const disarm = this.#timers.background(() => {
 			this.#expiry = undefined;
-			this.#settleIdle();
+			this.#expireContexts(this.#now(), this.#contextRetentionMs());
+			this.#scheduleExpiry();
 		}, at - this.#now());
 		if (disarm !== undefined) this.#expiry = { at, disarm };
 	}
@@ -954,7 +1052,16 @@ export class TaskScheduler {
 		}
 		if (work) this.#reconcilingWork--;
 		this.#scheduleWake();
-		this.#settleIdle();
+		// Its commit's task changes were settled at their publication; a waiter that asked for this pass checks again, and
+		// what its chain loads resolved can make any scope idle.
+		if (this.#unknownsChanged) {
+			this.#settleIdle(undefined);
+			return;
+		}
+		this.#resolveIdleWaiters(undefined);
+		// A pass checks expiry too, for hosts that decline the expiry timer.
+		this.#expireContexts(this.#now(), this.#contextRetentionMs());
+		this.#scheduleExpiry();
 	}
 
 	/**
@@ -1138,44 +1245,63 @@ export class TaskScheduler {
 	 */
 	async #loadChain(start: Up, overlay?: Overlay): Promise<void> {
 		const passed: TaskId[] = [];
+		let installed = false;
 		let at: Up | undefined = start;
-		while (at !== undefined) {
-			if ("task" in at) {
-				const id: TaskId = at.task;
-				let node: TaskNode | undefined = this.#live.get(id) ?? this.#settled.get(id);
-				// Created in this commit: the load from its own record covers what is above it.
-				if (node === undefined && overlay?.tasks.has(id) === true) break;
-				if (node !== undefined && !this.#unloaded.has(id)) break;
-				if (node === undefined) {
-					// Through the line's Storage: a task whose creation or end is not published yet waits for it.
-					const record = await this.#session.lineStorage.task(id, this.#context);
-					if (record === undefined) return;
-					node = nodeOf(record);
-					if (record.state.status === "terminal") {
-						this.#settle(id, node);
-						this.#pin(id);
+		try {
+			while (at !== undefined) {
+				if ("task" in at) {
+					const id: TaskId = at.task;
+					let node: TaskNode | undefined = this.#live.get(id) ?? this.#settled.get(id);
+					// Created in this commit: the load from its own record covers what is above it.
+					if (node === undefined && overlay?.tasks.has(id) === true) break;
+					if (node !== undefined && !this.#unloaded.has(id)) break;
+					if (node === undefined) {
+						// Through the line's Storage: a task whose creation or end is not published yet waits for it.
+						const record = await this.#session.lineStorage.task(id, this.#context);
+						if (record === undefined) return;
+						node = nodeOf(record);
+						if (record.state.status === "terminal") {
+							this.#settle(id, node);
+							this.#pin(id);
+							installed = true;
+						}
+						// A loaded node can reveal a cancelling owner: the next reconcile derives marks again.
+						this.#scheduleReconcile();
 					}
-					// A loaded node can reveal a cancelling owner: the next reconcile derives marks again.
-					this.#scheduleReconcile();
+					passed.push(id);
+					at = parentOf(node);
+				} else {
+					let edge = this.#edge(at.conversation, overlay);
+					if (edge === undefined) {
+						// Through the line's Storage: a conversation whose creation is not published yet waits for it, so a missing
+						// record is never mistaken for an ownerless one.
+						const record = await this.#session.lineStorage.conversation(at.conversation, this.#context);
+						edge = record?.owner?.taskId ?? null;
+						this.#setEdge(at.conversation, edge);
+						this.#pin(conversationNode(at.conversation));
+						installed = true;
+						// A loaded node can reveal a cancelling owner: the next reconcile derives marks again.
+						this.#scheduleReconcile();
+					}
+					at = edge === null ? undefined : { task: edge };
 				}
-				passed.push(id);
-				at = parentOf(node);
-			} else {
-				let edge = this.#edge(at.conversation, overlay);
-				if (edge === undefined) {
-					// Through the line's Storage: a conversation whose creation is not published yet waits for it, so a missing
-					// record is never mistaken for an ownerless one.
-					const record = await this.#session.lineStorage.conversation(at.conversation, this.#context);
-					edge = record?.owner?.taskId ?? null;
-					this.#setEdge(at.conversation, edge);
-					this.#pin(conversationNode(at.conversation));
-					// A loaded node can reveal a cancelling owner: the next reconcile derives marks again.
-					this.#scheduleReconcile();
-				}
-				at = edge === null ? undefined : { task: edge };
+			}
+		} finally {
+			// `#idle()` counts a live task whose chain is not loaded as inside every scope it may be in: what this load
+			// resolved, also when it stopped early, can make such a scope idle without a task change below it.
+			if (passed.some((id) => this.#live.has(id)) || (installed && this.#liveUnloaded())) {
+				this.#unknownsChanged = true;
+				// A waiter such a task held is checked again at the pass's end, also when this load was not a reconcile's.
+				this.#scheduleReconcile();
 			}
 		}
 		for (const id of passed) this.#unloaded.delete(id);
+	}
+
+	/** Whether a live task's chain is not loaded yet: one `#idle()` counts as inside every scope it may be in. */
+	#liveUnloaded(): boolean {
+		for (const id of this.#unloaded) if (this.#live.has(id)) return true;
+		return false;
 	}
 
 	#setEdge(conversationId: ConversationId, owner: TaskId | null): void {
@@ -1629,6 +1755,7 @@ export class TaskScheduler {
 		this.#taskWaiters.rejectAll(error);
 		this.#idleWaiters.rejectAll(error);
 		this.#contexts.clear();
+		this.#idleOrder.clear();
 		this.#expiry?.disarm();
 		this.#expiry = undefined;
 		this.#timer?.disarm();
@@ -1966,6 +2093,32 @@ export class TaskScheduler {
 			unloaded: this.#unloaded.size,
 			dropQueue: this.#dropQueue.size,
 			pins: this.#pins.size,
+		};
+	}
+
+	/**
+	 * The kept contexts' idle state, for tests (a diagnostic, computed on demand): how many are kept and how many are
+	 * idle, how many disagree with a full recompute (an idle period without `#idle()`, or `#idle()` without one; an
+	 * expiry order that differs from the idle periods, or is not sorted), and how many idle checks covered every scope.
+	 */
+	get idleState(): Readonly<Record<"contexts" | "idleContexts" | "idleMismatches" | "fullIdleChecks", number>> {
+		let mismatches = 0;
+		let idle = 0;
+		for (const [conversationId, kept] of this.#contexts) {
+			if (kept.idleSince !== undefined) idle++;
+			if ((kept.idleSince !== undefined) !== this.#idle(conversationId)) mismatches++;
+			if (this.#idleOrder.get(conversationId) !== kept.idleSince) mismatches++;
+		}
+		let previous = Number.NEGATIVE_INFINITY;
+		for (const [conversationId, idleSince] of this.#idleOrder) {
+			if (idleSince < previous || this.#contexts.get(conversationId)?.idleSince !== idleSince) mismatches++;
+			previous = idleSince;
+		}
+		return {
+			contexts: this.#contexts.size,
+			idleContexts: idle,
+			idleMismatches: mismatches,
+			fullIdleChecks: this.#fullIdleChecks,
 		};
 	}
 
@@ -2713,14 +2866,16 @@ export class TaskScheduler {
 						// A read of another, idle conversation starts or continues its retention period.
 						if (!this.#idle(conversationId)) {
 							this.#contexts.set(conversationId, { range, idleSince: undefined });
+							this.#idleOrder.delete(conversationId);
 						} else if (this.#contextRetentionMs() > 0) {
-							// An idle period that already started keeps its expiry; a new one starts now.
+							// An idle period that already started keeps its expiry and its place; a new one starts now.
 							const idleSince = kept?.idleSince ?? this.#now();
 							const expiresAt =
 								kept?.idleSince !== undefined && kept.expiresAt !== undefined
 									? kept.expiresAt
 									: idleSince + this.#contextRetentionMs();
 							this.#contexts.set(conversationId, { range, idleSince, expiresAt });
+							if (kept?.idleSince === undefined) this.#markIdle(conversationId, idleSince);
 							this.#scheduleExpiry();
 						}
 					}

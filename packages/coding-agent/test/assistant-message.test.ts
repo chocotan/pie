@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { formatMessageTime } from "../src/modes/interactive/components/message-time.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
@@ -57,6 +57,37 @@ function mouseEvent(
 }
 
 describe("AssistantMessageComponent", () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	test("reuses its Markdown across streaming and its end, and renders like a new component after a theme change", () => {
+		initTheme("dark");
+		const highlight = vi.spyOn(syntaxHighlight, "highlight");
+		const streaming: boolean[] = [];
+		const code = "```ts\nconst a = 1;\n```";
+		const content = (text: string): AssistantMessage["content"] => [
+			{ type: "thinking", thinking: "Thinking with **bold** text" },
+			{ type: "text", text },
+		];
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
+			(markdown, { isStreaming }) => {
+				streaming.push(isStreaming());
+				return markdown;
+			},
+		]);
+		component.updateContent(createAssistantMessage(content(code)), true);
+		component.render(80);
+		const message = createAssistantMessage(content(`${code}\n\nThe end.`));
+		component.updateContent(message, false);
+		component.render(80);
+		expect(highlight).toHaveBeenCalledTimes(1);
+		expect(streaming.at(-1)).toBe(false);
+
+		initTheme("light");
+		component.invalidate();
+		expect(component.render(80)).toEqual(new AssistantMessageComponent(message).render(80));
+		initTheme("dark");
+	});
+
 	test("hides thinking by default in one line while preserving click-to-expand", () => {
 		initTheme("dark");
 		const component = new AssistantMessageComponent(

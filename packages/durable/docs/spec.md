@@ -4,16 +4,10 @@
 It uses existing package types as follows:
 
 ```ts
-import type {
-  Context,
-  Draft,
-  JsonRepresentation,
-  JsonValue,
-  WatchCall,
-  WatchEnd,
-  WatchHandle,
-} from "@earendil-works/chord";
-import type { Op } from "@earendil-works/chord/delta";
+import type { Context } from "@earendil-works/chord/context";
+import type { Draft, Op } from "@earendil-works/chord/delta";
+import type { JsonRepresentation, JsonValue } from "@earendil-works/chord/json";
+import type { WatchCall, WatchEnd, WatchHandle } from "@earendil-works/chord/watch";
 import type {
   AssistantMessage,
   CacheRetention,
@@ -3339,6 +3333,7 @@ consuming commit may rerun them. Abort errors always propagate.
 | hook | composition | ordinary throw |
 |---|---|---|
 | `beforeRequest` | replacement chain | report, continue |
+| `beforeProviderRequest` | replacement chain | report, continue |
 | `afterResponse` | all observers | report, continue |
 | `onYield` | first continuation wins | report, continue |
 | `beforeTool` | argument replacement chain; first block wins | block tool with error text |
@@ -3380,6 +3375,12 @@ interface GenerationHooks {
     api: HookApi,
     context: Context,
   ): HookResult<{ readonly messages: readonly Message[] }>;
+  /** After pi-ai builds the provider request body, before it is sent; replaces the body for that request only. */
+  beforeProviderRequest(
+    request: { readonly model: Model<Api>; readonly payload: unknown },
+    api: HookApi,
+    context: Context,
+  ): HookResult<{ readonly payload: unknown }>;
   /** Every terminal provider message, before classification. */
   afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
   /** A final answer; `continue` appends a user message and continues the run. */
@@ -3801,8 +3802,14 @@ declares them, built from the resolved tools. Loaded tools follow the other
 tools in load order, so a load appends declarations to the transcript and the
 cached prefix holds. `@earendil-works/pi-durable/tool-search` provides the
 coding agent's `tool_search` (`createToolSearchExtension()`): it ranks
-`Agent.deferred` with BM25 over the tools' names, descriptions, and parameter
-names and descriptions, and loads the matches. The `codemode` section does not
+`Agent.deferred` with the coding agent's tool ranking and loads the matches.
+The ranking is BM25 over the tools' descriptions and parameter names and
+descriptions, with the name as a separate field: a tool matching more of the
+query's terms ranks above one matching fewer, a query term in the name
+outweighs any number of mentions in the description, a tool whose whole name
+after its last `__` is in the query gets a large bonus, and a query that is
+exactly a tool's name ranks it first. Code mode's `searchTools()` ranks the
+same way, with each tool's namespace text as a further, low-weight field. The `codemode` section does not
 list deferred tools; scripts find them with `searchTools()`.
 
 Tools reach files and processes only through `api.env`, never through an
@@ -4900,7 +4907,9 @@ The run's inputs live in `pi.live.run`, not in the task input.
   (section 4.1), so Storage gets them at the next commit that reads `pi.live`
   or within `settings.progress.persistWithinMs`.
   Before streaming, the `beforeRequest` chain may
-  replace the messages for this request only. After a close, recovery resends
+  replace the messages for this request only. Once pi-ai has built the provider
+  request body, the `beforeProviderRequest` chain may replace it, again for this
+  request only; it runs each time pi-ai builds a body. After a close, recovery resends
   the same committed messages with the same pinned model, thinking level, and
   stream options, and reruns `beforeRequest`; after a crash the attempt is
   charged instead, as above.
@@ -5366,7 +5375,7 @@ aborted directly (section 8.3).
 ### 9.1 Watches
 
 Durable exposes committed state only through watches: Chord's `WatchHandle`
-and its end type `WatchEnd`, exported by `@earendil-works/chord` (Durable
+and its end type `WatchEnd`, exported by `@earendil-works/chord/watch` (Durable
 re-exports both):
 
 ```ts

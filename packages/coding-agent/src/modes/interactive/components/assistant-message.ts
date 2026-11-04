@@ -17,6 +17,15 @@ import { createMarkdownTransform } from "./markdown-transform.ts";
 import { appendMessageTime, formatMessageTime, TIME_RIGHT_RESERVE } from "./message-time.ts";
 import { RenderCache } from "./render-cache.ts";
 
+/**
+ * A Markdown block of the last update. The next update reuses it at the same position for the same kind of content, so
+ * a streamed answer keeps the blocks it already rendered, also once the stream ends.
+ */
+interface MarkdownSlot {
+	kind: "text" | "thinking";
+	markdown: Markdown;
+}
+
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
@@ -90,6 +99,7 @@ export class AssistantMessageComponent extends Container {
 	private readonly autoExpandLiveThinking: boolean;
 	private readonly thinkingTimes = new Map<number, { started: number; ended?: number }>();
 	private readonly renderCache = new RenderCache();
+	private markdownSlots: MarkdownSlot[] = [];
 
 	constructor(
 		message?: AssistantMessage,
@@ -148,6 +158,8 @@ export class AssistantMessageComponent extends Container {
 
 	setOutputPad(padding: number): void {
 		this.outputPad = padding;
+		// Markdown takes its padding at construction.
+		this.markdownSlots = [];
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -181,6 +193,15 @@ export class AssistantMessageComponent extends Container {
 
 		// Clear content container
 		this.contentContainer.clear();
+		const previousSlots = this.markdownSlots;
+		this.markdownSlots = [];
+		const markdownBlock = (kind: MarkdownSlot["kind"], text: string, create: () => Markdown): Markdown => {
+			const slot = previousSlots[this.markdownSlots.length];
+			const markdown = slot?.kind === kind ? slot.markdown : create();
+			markdown.setText(text);
+			this.markdownSlots.push({ kind, markdown });
+			return markdown;
+		};
 
 		// Spacers are added lazily, right before the next visible content block. This puts a blank
 		// line before the first visible block and after each visible thinking run that is followed
@@ -201,16 +222,17 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
+				const text = content.text.trim();
 				addVisibleChild(
-					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
+					markdownBlock("text", text, () => new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
 						transform: createMarkdownTransform(
 							"assistant",
-							this.isStreaming,
+							() => this.isStreaming,
 							this.markdownTransformers,
 							this.messageId,
 							this.timestamp,
 						),
-					}),
+					})),
 				);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
@@ -277,7 +299,7 @@ export class AssistantMessageComponent extends Container {
 							{
 								transform: createMarkdownTransform(
 									"assistant-thinking",
-									this.isStreaming,
+									() => this.isStreaming,
 									this.markdownTransformers,
 									this.messageId,
 									this.timestamp,
