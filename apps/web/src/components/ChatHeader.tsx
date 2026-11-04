@@ -18,6 +18,7 @@ function useMediaQuery(query: string): boolean {
 const VIEW_TABS: Array<{ key: ViewTab; label: string }> = [
 	{ key: "chat", label: "对话" },
 	{ key: "trajectory", label: "轨迹" },
+	{ key: "superagent", label: "工单" },
 ];
 
 export function ChatHeader(props: { title: string }): ReactElement {
@@ -35,8 +36,14 @@ export function ChatHeader(props: { title: string }): ReactElement {
 			>
 				<Icon name="menu" />
 			</button>
+			{state.subagent && (
+				<button className="icon-btn" aria-label="返回主会话" onClick={() => actions.closeSubagent()}>
+					<Icon name="chev" className={styles.back} />
+				</button>
+			)}
 			<h1>{props.title}</h1>
-			<div className={styles.viewTabs} role="tablist" aria-label="中央视图">
+			{!state.subagent && state.view !== "settings" && (
+				<div className={styles.viewTabs} role="tablist" aria-label="中央视图">
 				{VIEW_TABS.map((tab) => (
 					<button
 						key={tab.key}
@@ -48,18 +55,26 @@ export function ChatHeader(props: { title: string }): ReactElement {
 						{tab.label}
 					</button>
 				))}
-			</div>
-			<button
-				className="icon-btn"
-				aria-label={rightOpen ? "关闭任务面板" : "打开任务面板"}
-				aria-expanded={rightOpen}
-				onClick={() => {
-					if (isRightDrawer) actions.setRightDrawerOpen(!state.rightDrawerOpen);
-					else actions.toggleRight();
-				}}
-			>
-				<Icon name="panel" />
-			</button>
+				</div>
+			)}
+			{!state.subagent && (
+				<button className={styles.settingsButton} onClick={() => actions.setView(state.view === "settings" ? "chat" : "settings")}>
+					{state.view === "settings" ? "返回" : "设置"}
+				</button>
+			)}
+			{state.view !== "settings" && (
+				<button
+					className="icon-btn"
+					aria-label={rightOpen ? "关闭任务面板" : "打开任务面板"}
+					aria-expanded={rightOpen}
+					onClick={() => {
+						if (isRightDrawer) actions.setRightDrawerOpen(!state.rightDrawerOpen);
+						else actions.toggleRight();
+					}}
+				>
+					<Icon name="panel" />
+				</button>
+			)}
 		</header>
 	);
 }

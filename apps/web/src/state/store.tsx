@@ -23,7 +23,7 @@ import { api, connectEvents, getToken } from "../api.ts";
 import { type ConvoState, convoFromSnapshot, reduceEvent } from "./convo-reducer.ts";
 
 export type ThemeSetting = "light" | "dark" | "system";
-export type ViewTab = "chat" | "trajectory";
+export type ViewTab = "chat" | "trajectory" | "superagent" | "settings";
 export type RightTab = "tasks" | "agents" | "jobs";
 
 export interface Toast {
@@ -56,6 +56,7 @@ export interface AppState {
 	theme: ThemeSetting;
 	toasts: Toast[];
 	extUi: { workspaceId: string; request: ExtensionUIRequest } | null;
+	subagent: { title: string; convo: ConvoState } | null;
 	loading: boolean;
 }
 
@@ -65,7 +66,7 @@ const initialState: AppState = {
 	sessionsByWs: {},
 	runtimeStatus: {},
 	activeWorkspaceId: null,
-	view: "chat",
+	view: window.location.pathname === "/settings" ? "settings" : "chat",
 	convos: {},
 	trajectories: {},
 	collapsedWs: {},
@@ -79,6 +80,7 @@ const initialState: AppState = {
 	})(),
 	toasts: [],
 	extUi: null,
+	subagent: null,
 	loading: true,
 };
 
@@ -97,6 +99,8 @@ export type Action =
 	| { type: "event"; workspaceId: string; sessionId: string; event: Parameters<typeof reduceEvent>[1] }
 	| { type: "extension_ui"; workspaceId: string; request: ExtensionUIRequest }
 	| { type: "extension_ui_done" }
+	| { type: "subagent"; title: string; convo: ConvoState }
+	| { type: "close_subagent" }
 	| { type: "select_workspace"; workspaceId: string }
 	| { type: "set_view"; view: ViewTab }
 	| { type: "set_right_tab"; tab: RightTab }
@@ -213,8 +217,12 @@ function reduce(state: AppState, action: Action): AppState {
 			return { ...state, extUi: { workspaceId: action.workspaceId, request: action.request } };
 		case "extension_ui_done":
 			return { ...state, extUi: null };
+		case "subagent":
+			return { ...state, subagent: { title: action.title, convo: action.convo } };
+		case "close_subagent":
+			return { ...state, subagent: null };
 		case "select_workspace":
-			return { ...state, activeWorkspaceId: action.workspaceId, sidebarOpen: false };
+			return { ...state, activeWorkspaceId: action.workspaceId, sidebarOpen: false, subagent: null };
 		case "set_view":
 			return { ...state, view: action.view };
 		case "set_right_tab":
@@ -244,6 +252,9 @@ export interface Actions {
 	selectWorkspace(id: string): void;
 	addWorkspace(path: string): Promise<void>;
 	removeWorkspace(id: string): Promise<void>;
+	deleteSession(workspaceId: string, sessionPath: string): Promise<void>;
+	openSubagent(sessionPath: string, title: string): Promise<void>;
+	closeSubagent(): void;
 	newSession(): Promise<void>;
 	selectSession(sessionPath: string): Promise<void>;
 	renameSession(name: string): Promise<void>;
@@ -401,6 +412,9 @@ export function StoreProvider(props: { children: ReactNode }) {
 						}
 					}
 				});
+				window.addEventListener("popstate", () => {
+					dispatch({ type: "set_view", view: window.location.pathname === "/settings" ? "settings" : "chat" });
+				});
 			},
 			selectWorkspace(id) {
 				dispatch({ type: "select_workspace", workspaceId: id });
@@ -423,12 +437,33 @@ export function StoreProvider(props: { children: ReactNode }) {
 					handleError(error);
 				}
 			},
+			async deleteSession(workspaceId, sessionPath) {
+				try {
+					await api.deleteSession(workspaceId, sessionPath);
+				} catch (error) {
+					handleError(error);
+				}
+			},
+			async openSubagent(sessionPath, title) {
+				const workspaceId = activeWorkspaceId();
+				if (!workspaceId) return;
+				try {
+					const { snapshot } = await api.subagentSnapshot(workspaceId, sessionPath);
+					dispatch({ type: "subagent", title, convo: convoFromSnapshot(snapshot) });
+				} catch (error) {
+					handleError(error);
+				}
+			},
+			closeSubagent() {
+				dispatch({ type: "close_subagent" });
+			},
 			async newSession() {
 				const id = activeWorkspaceId();
 				if (!id) return;
 				try {
 					const { snapshot } = await api.newSession(id);
 					dispatch({ type: "snapshot", snapshot });
+					dispatch({ type: "close_subagent" });
 					dispatch({ type: "set_view", view: "chat" });
 				} catch (error) {
 					handleError(error);
@@ -440,6 +475,7 @@ export function StoreProvider(props: { children: ReactNode }) {
 				try {
 					const { snapshot } = await api.selectSession(id, sessionPath);
 					dispatch({ type: "snapshot", snapshot });
+					dispatch({ type: "close_subagent" });
 					dispatch({ type: "set_view", view: "chat" });
 					dispatch({ type: "set_sidebar_open", open: false });
 				} catch (error) {
@@ -502,6 +538,8 @@ export function StoreProvider(props: { children: ReactNode }) {
 				}
 			},
 			setView(view) {
+				const path = view === "settings" ? "/settings" : "/";
+				if (window.location.pathname !== path) window.history.pushState(null, "", path);
 				dispatch({ type: "set_view", view });
 				if (view === "trajectory") void loadTrajectory();
 			},

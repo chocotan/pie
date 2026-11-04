@@ -10,6 +10,7 @@ import type {
 	ServerMessage,
 	SessionConfigDto,
 	SessionSummary,
+	SettingsSnapshotDto,
 	ThinkingLevel,
 	TrajectoryDto,
 	WorkspaceInfo,
@@ -85,6 +86,15 @@ export const api = {
 		apiFetch<{ sessions: SessionSummary[] }>(`/api/workspaces/${workspaceId}/sessions`),
 	snapshot: (workspaceId: string) =>
 		apiFetch<{ snapshot: ConversationSnapshot }>(`/api/workspaces/${workspaceId}/snapshot`),
+	deleteSession: (workspaceId: string, sessionPath: string) =>
+		apiFetch<{ ok: true }>(`/api/workspaces/${workspaceId}/session`, {
+			method: "DELETE",
+			body: { sessionPath },
+		}),
+	subagentSnapshot: (workspaceId: string, sessionPath: string) =>
+		apiFetch<{ snapshot: ConversationSnapshot }>(
+			`/api/workspaces/${workspaceId}/subagent?sessionPath=${encodeURIComponent(sessionPath)}`,
+		),
 	trajectory: (workspaceId: string) =>
 		apiFetch<{ trajectory: TrajectoryDto }>(`/api/workspaces/${workspaceId}/trajectory`),
 	newSession: (workspaceId: string) =>
@@ -115,7 +125,30 @@ export const api = {
 		apiFetch<{ ok: true }>(`/api/workspaces/${workspaceId}/session-name`, { method: "POST", body: { name } }),
 	respondExtensionUI: (workspaceId: string, response: ExtensionUIResponse) =>
 		apiFetch<{ ok: true }>(`/api/workspaces/${workspaceId}/extension-ui`, { method: "POST", body: response }),
+	settingsSnapshot: (workspaceId: string) =>
+		apiFetch<{ settings: SettingsSnapshotDto }>(`/api/workspaces/${workspaceId}/settings`),
+	saveSettings: (
+		workspaceId: string,
+		target: "global" | "skill" | "agents" | "subagent",
+		body: unknown,
+	) => apiFetch<{ ok: true }>(`/api/workspaces/${workspaceId}/settings/${target}`, { method: "PUT", body }),
+	createSettings: (workspaceId: string, target: "skill" | "subagent", body: unknown) =>
+		apiFetch<{ ok: true }>(`/api/workspaces/${workspaceId}/settings/${target}`, { method: "POST", body }),
+	superagent: () => apiFetch<SuperagentOverview>("/api/superagent"),
+	pauseSuperagent: (paused: boolean) =>
+		apiFetch<{ paused: boolean }>("/api/superagent/pause", { method: "POST", body: { paused } }),
+	stopTicket: (ticketId: string) =>
+		apiFetch<{ stopped: true }>(`/api/superagent/tickets/${ticketId}/stop`, { method: "POST" }),
 };
+
+export interface SuperagentOverview {
+	setup: { problem: string; detail: string } | null;
+	repository: string;
+	paused: boolean;
+	tickets: Array<{ id: string; title: string; stage: { stage: string; action?: string }; updatedAt: string }>;
+	threads: Array<{ key: string; pending: number; subscriptions: number }>;
+	replies: Array<{ text: string }>;
+}
 
 export type { ModelOption };
 

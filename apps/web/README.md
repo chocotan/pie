@@ -48,6 +48,8 @@ coding agent RPC（JSONL stdin/stdout）
 - 会话快照 = `get_state` + `get_messages` + `get_session_stats` + 模型/思考强度列表 + 进行中 run 的缓存事件；事件带 (workspaceId, sessionId)，前端只把匹配当前快照的事件写入状态（事件隔离）。
 - 前端流式重建是纯函数（`src/state/convo-reducer.ts`）：text/thinking delta 按 contentIndex 累积，toolcall 参数按 JSON 片段累积，tool_execution_* 驱动工具卡状态。
 - 扩展对话框（select/confirm/input/editor）以模态回复，notify 显示为非阻塞通知。
+- 对话消息支持 Markdown；子代理卡片可打开独立会话快照并返回主会话。
+- 非活动会话可从侧栏删除；host 校验会话归属，当前会话需先切换再删除。
 - 断线重连：host 跟踪未答复的扩展 UI 请求与仍在运行的工具事件，新 WS 连接建立后重放；客户端重连后重取已加载工作区的权威快照。事件按 (workspaceId, sessionId) 过滤，旧会话/已停止进程的迟到事件不会写入当前快照。
 - 字段归一：host 在边界把 toolCall 块的 toolCallId/toolName/input 拼写统一为 id/name/arguments。
 
@@ -60,6 +62,26 @@ coding agent RPC（JSONL stdin/stdout）
 - 支持按关键字搜索与按类型过滤（全部 / 用户 / 助手 / 工具 / 系统），顶部显示事件数、轮次数与工具次数。
 - 数据来自 RPC `get_entries`，host 只返回最近 300 条、每条原始 JSON 最多 4000 字符；打开轨迹时才请求，不进入对话快照。
 
+## 工单（Superagent）
+
+访问头部「工单」打开主动代理面板。它使用 pie 会话执行已授权工单，不依赖 DeepSeek Harness。
+
+- 总览显示仓库、暂停状态、工单阶段和线程。
+- `POST /api/superagent/pause` 暂停或继续处理。
+- `POST /api/superagent/tickets/:id/stop` 由人停止工单并撤回授权。
+- GitHub 与飞书来源、评估规则和执行环境配置保存在 superagent 状态目录。
+
+## 设置中心
+
+访问 `/settings` 或点击会话头部的「设置」：
+
+- Skills：查看、创建、编辑 `SKILL.md`，并通过 `disable-model-invocation` 配置是否允许模型自动调用。
+- 全局配置：编辑 `<agentDir>/settings.json`，保存前校验 JSON 对象。
+- AGENTS.md：编辑全局 `<agentDir>/AGENTS.md` 或当前工作区 `AGENTS.md`。
+- Subagents：查看内置定义，创建或编辑用户/项目 agents 目录中的 Markdown 定义。
+
+配置写回真实文件；运行中的 agent 需要重新加载或重启后使用新配置。Subagent 的新运行会重新发现定义。
+
 ## API
 
 | 方法 | 路径 | 作用 |
@@ -69,6 +91,8 @@ coding agent RPC（JSONL stdin/stdout）
 | DELETE | `/api/workspaces/:id` | 移除工作区并停止其 RPC 进程 |
 | GET | `/api/workspaces/:id/sessions` | 重新列出会话 |
 | GET | `/api/workspaces/:id/snapshot` | 会话快照（消息、状态、模型、统计） |
+| DELETE | `/api/workspaces/:id/session` | 删除非活动会话（body：`sessionPath`） |
+| GET | `/api/workspaces/:id/subagent?sessionPath=...` | 当前主会话记录的子代理会话快照 |
 | GET | `/api/workspaces/:id/trajectory` | 当前会话的轨迹条目 |
 | POST | `/api/workspaces/:id/new-session` | 新建会话 |
 | POST | `/api/workspaces/:id/select-session` | 切换会话 |
@@ -78,6 +102,9 @@ coding agent RPC（JSONL stdin/stdout）
 | POST | `/api/workspaces/:id/thinking-level` | 切换思考强度 |
 | POST | `/api/workspaces/:id/session-name` | 重命名会话 |
 | POST | `/api/workspaces/:id/extension-ui` | 回复扩展对话框 |
+| GET | `/api/workspaces/:id/settings` | Skills、全局配置、AGENTS.md、Subagents 配置快照 |
+| PUT | `/api/workspaces/:id/settings/:type` | 保存 `global/skill/agents/subagent` 配置 |
+| POST | `/api/workspaces/:id/settings/:type` | 新建 `skill/subagent` 配置 |
 | WS | `/ws?token=` | 事件、扩展请求、运行时状态推送 |
 
 ## 测试

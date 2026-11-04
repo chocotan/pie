@@ -5,6 +5,8 @@ import { Composer } from "./components/Composer.tsx";
 import { ExtensionModal } from "./components/ExtensionModal.tsx";
 import { IconSprite } from "./components/Icon.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
+import { SettingsView } from "./components/SettingsView.tsx";
+import { SuperagentView } from "./components/SuperagentView.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { Thread } from "./components/Thread.tsx";
 import { TrajectoryView } from "./components/TrajectoryView.tsx";
@@ -53,8 +55,16 @@ export function App(): ReactElement {
 	}, [actions, state.extUi]);
 
 	const convo = state.activeWorkspaceId ? state.convos[state.activeWorkspaceId] : undefined;
+	const displayedConvo = state.subagent?.convo ?? convo;
 	const runtimeStatus = state.activeWorkspaceId ? (state.runtimeStatus[state.activeWorkspaceId] ?? "stopped") : "stopped";
-	const title = convo ? (convo.sessionName ?? firstUserText(convo.messages) ?? "新会话") : "pie";
+	const title =
+		state.view === "settings"
+			? "设置"
+			: state.subagent
+				? state.subagent.title
+				: convo
+					? (convo.sessionName ?? firstUserText(convo.messages) ?? "新会话")
+					: "pie";
 	const scrimOn = state.sidebarOpen || state.rightDrawerOpen;
 
 	return (
@@ -63,10 +73,14 @@ export function App(): ReactElement {
 			<Sidebar />
 			<main className="main">
 				<ChatHeader title={title} />
-				{state.view === "trajectory" ? (
+				{state.view === "settings" ? (
+					<SettingsView />
+				) : state.view === "superagent" && !state.subagent ? (
+					<SuperagentView />
+				) : state.view === "trajectory" && !state.subagent ? (
 					<TrajectoryView convo={convo} />
-				) : convo ? (
-					<Thread convo={convo} />
+				) : displayedConvo ? (
+					<Thread convo={displayedConvo} />
 				) : (
 					<div className="chat-body">
 						<div className="thread">
@@ -77,9 +91,11 @@ export function App(): ReactElement {
 						</div>
 					</div>
 				)}
-				<Composer convo={convo} runtimeReady={runtimeStatus === "running" || convo !== undefined} />
+				{state.view !== "settings" && !state.subagent && (
+					<Composer convo={convo} runtimeReady={runtimeStatus === "running" || convo !== undefined} />
+				)}
 			</main>
-			<RightPanel />
+			{state.view !== "settings" && <RightPanel />}
 			<div
 				className="scrim"
 				data-on={scrimOn}

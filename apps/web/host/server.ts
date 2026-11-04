@@ -24,6 +24,8 @@ import {
 	type ServerMessage,
 } from "../shared/protocol.ts";
 import { listWorkspaceSessions, type RuntimeSink, WorkspaceRuntime } from "./runtime.ts";
+import { WorkspaceSettings } from "./settings.ts";
+import { SuperagentService } from "../superagent/src/service.ts";
 import { WorkspaceError, type Workspace, type WorkspaceRegistry } from "./workspaces.ts";
 
 const MAX_JSON_BODY = 1_000_000;
@@ -112,6 +114,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 export function createWebServer(options: WebServerOptions): WebServerHandle {
 	const { token, registry } = options;
 	const runtimes = new Map<string, WorkspaceRuntime>();
+	const superagent = new SuperagentService({ stateDir: join(process.cwd(), ".pie-superagent") });
 	const clients = new Set<WebSocket>();
 	const refreshTimers = new Map<string, NodeJS.Timeout>();
 
@@ -181,7 +184,22 @@ export function createWebServer(options: WebServerOptions): WebServerHandle {
 		}
 
 		// /api/workspaces/:id[/action]
-		if (parts[1] === "workspaces" && parts.length >= 3) {
+		if (parts[1] === "superagent" && method === "GET" && !parts[2]) {
+				sendJson(res, 200, superagent.overview());
+				return;
+			}
+			if (parts[1] === "superagent" && method === "POST" && parts[2] === "pause") {
+				const body = (await readJsonBody(req)) as { paused?: unknown };
+				superagent.settings = { ...superagent.settings, paused: body.paused === true };
+				sendJson(res, 200, { paused: superagent.settings.paused });
+				return;
+			}
+			if (parts[1] === "superagent" && method === "POST" && parts[2] === "tickets" && parts[4] === "stop") {
+				superagent.engine.stopTicket(parts[3]!);
+				sendJson(res, 200, { stopped: true });
+				return;
+			}
+			if (parts[1] === "workspaces" && parts.length >= 3) {
 			const workspace = registry.get(parts[2]);
 			if (!workspace) {
 				sendError(res, 404, "未知工作区");
@@ -189,6 +207,34 @@ export function createWebServer(options: WebServerOptions): WebServerHandle {
 			}
 			const action = parts.length === 4 ? parts[3] : undefined;
 
+			if (method === "GET" && action === "settings") {
+				sendJson(res, 200, { settings: await new WorkspaceSettings(workspace.path).snapshot() });
+				return;
+			}
+			if ((method === "PUT" || method === "POST") && parts.length === 5 && parts[3] === "settings") {
+				const settings = new WorkspaceSettings(workspace.path);
+				const target = parts[4];
+				const body = await readJsonBody(req);
+				if (method === "PUT") {
+					if (target === "global") await settings.saveGlobal(body);
+					else if (target === "skill") await settings.saveSkill(body);
+					else if (target === "agents") await settings.saveAgents(body);
+					else if (target === "subagent") await settings.saveSubagent(body);
+					else {
+						sendError(res, 404, "未知设置类型");
+						return;
+					}
+				} else {
+					if (target === "skill") await settings.createSkill(body);
+					else if (target === "subagent") await settings.createSubagent(body);
+					else {
+						sendError(res, 404, "未知设置类型");
+						return;
+					}
+				}
+				sendJson(res, 200, { ok: true });
+				return;
+			}
 			if (method === "DELETE" && !action) {
 				const runtime = runtimes.get(workspace.id);
 				if (runtime) await runtime.dispose();
@@ -213,6 +259,17 @@ export function createWebServer(options: WebServerOptions): WebServerHandle {
 			}
 			if (method === "GET" && action === "snapshot") {
 				sendJson(res, 200, { snapshot: await runtimeFor(workspace).snapshot() });
+				return;
+			}
+			if (method === "DELETE" && action === "session") {
+				const { sessionPath } = parseSelectSession(await readJsonBody(req));
+				await runtimeFor(workspace).deleteSession(sessionPath);
+				sendJson(res, 200, { ok: true });
+				return;
+			}
+			if (method === "GET" && action === "subagent") {
+				const { sessionPath } = parseSelectSession({ sessionPath: url.searchParams.get("sessionPath") });
+				sendJson(res, 200, { snapshot: await runtimeFor(workspace).subagentSnapshot(sessionPath) });
 				return;
 			}
 			if (method === "GET" && action === "trajectory") {
@@ -358,6 +415,7 @@ export function createWebServer(options: WebServerOptions): WebServerHandle {
 			await new Promise<void>((resolve) => wss.close(() => resolve()));
 			await Promise.all([...runtimes.values()].map((r) => r.dispose()));
 			runtimes.clear();
+			await superagent.close();
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		},
 	};

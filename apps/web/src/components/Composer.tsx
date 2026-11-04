@@ -23,6 +23,7 @@ function formatTokens(n: number): string {
 export function Composer(props: { convo: ConvoState | undefined; runtimeReady: boolean }): ReactElement {
 	const { actions } = useStore();
 	const [text, setText] = useState("");
+	const [openMenu, setOpenMenu] = useState<"model" | "level" | null>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const convo = props.convo;
 	const streaming = convo?.streaming === true;
@@ -91,6 +92,8 @@ export function Composer(props: { convo: ConvoState | undefined; runtimeReady: b
 				/>
 				<div className="composer-bar">
 					<Dropdown
+						open={openMenu === "model"}
+						onOpenChange={(open) => setOpenMenu(open ? "model" : null)}
 						ariaLabel={`切换模型（当前：${convo?.model?.id ?? "未知"}）`}
 						label={
 							<>
@@ -102,6 +105,9 @@ export function Composer(props: { convo: ConvoState | undefined; runtimeReady: b
 						disabled={!convo || streaming}
 					/>
 					<Dropdown
+						align="end"
+						open={openMenu === "level"}
+						onOpenChange={(open) => setOpenMenu(open ? "level" : null)}
 						ariaLabel={`切换思考强度（当前：${LEVEL_LABELS[convo?.thinkingLevel ?? "off"]}）`}
 						label={
 							<>

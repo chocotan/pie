@@ -18,8 +18,17 @@ export function Dropdown(props: {
 	ariaLabel: string;
 	items: DropdownItem[];
 	disabled?: boolean;
+	defaultOpen?: boolean;
+	align?: "start" | "end";
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
 }): ReactElement {
-	const [open, setOpen] = useState(false);
+	const [uncontrolledOpen, setUncontrolledOpen] = useState(props.defaultOpen ?? false);
+	const open = props.open ?? uncontrolledOpen;
+	const setOpen = (next: boolean) => {
+		props.onOpenChange?.(next);
+		if (props.open === undefined) setUncontrolledOpen(next);
+	};
 	const wrapRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -53,7 +62,7 @@ export function Dropdown(props: {
 				<Icon name="chev" />
 			</button>
 			{open && (
-				<div className={styles.menu} role="menu">
+				<div className={props.align === "end" ? `${styles.menu} ${styles.menuEnd}` : styles.menu} role="menu">
 					{props.items.length === 0 && <div className={styles.group}>无可选项</div>}
 					{props.items.map((item) => {
 						const groupHeader =
@@ -75,7 +84,7 @@ export function Dropdown(props: {
 										item.onSelect();
 									}}
 								>
-									<Icon name="check" />
+									<Icon name="check" className={styles.check} />
 									<span className={styles.itemLabel}>{item.label}</span>
 									{item.meta && <span className={styles.itemMeta}>{item.meta}</span>}
 								</button>

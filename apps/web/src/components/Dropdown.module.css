@@ -15,6 +15,7 @@
   box-shadow: var(--shadow-pop);
   padding: 4px;
 }
+.menuEnd { left: auto; right: 0; }
 
 .group {
   padding: 6px 10px 2px;
@@ -44,5 +45,5 @@
   white-space: nowrap;
 }
 .itemMeta { font-size: 11px; color: var(--text-3); flex: none; }
-.item .icon { width: 14px; height: 14px; visibility: hidden; }
-.item[aria-current="true"] .icon { visibility: visible; }
+.check { width: 14px; height: 14px; visibility: hidden; }
+.item[aria-current="true"] .check { visibility: visible; }
