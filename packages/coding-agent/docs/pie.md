@@ -133,7 +133,7 @@ Tool: `ask_user_question`. Use a `questions` array even for one question:
 
 Supports 1–4 questions with 2–4 options each, multi-select, a built-in `Type something.` row, cancellation, and single-select Markdown previews. Do not author `Other`, `Type something.`, or `Next` options. Header limit: 16 characters. Label limit: 60 characters.
 
-Wide TUI questionnaires place options and previews side by side; narrow views stack them. Free-text input uses the native input component and preserves the host's cursor and keybindings. RPC uses select/input dialogs. Non-interactive modes leave the tool inactive; a direct call without UI returns an error stating that the user never saw the questions. Cancellation is not approval.
+TUI questionnaires stay below the conversation, limited to 12 lines instead of covering messages. Wide views place options and previews side by side; narrow views stack them. Free-text input uses the native input component and preserves the host's cursor and keybindings. RPC uses select/input dialogs. Non-interactive modes leave the tool inactive; a direct call without UI returns an error stating that the user never saw the questions. Cancellation is not approval.
 
 The schema, validation, normalization, response format, and RPC behavior are adapted from [rpiv-ask-user-question](https://github.com/juicesharp/rpiv-mono/tree/2d88b79c08ce19ffeecbe85d5ee1071046b708c0/packages/rpiv-ask-user-question). The view is adapted to this fork's native components and keybindings. The [MIT notice](third-party/rpiv-ask-user-question-LICENSE) is included. No rpiv-config or internationalization dependency is required.
 

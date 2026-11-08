@@ -31,39 +31,41 @@ describe("ported ask-user plugin", () => {
 		const keys = new KeybindingsManager();
 		const previousKeys = getKeybindings();
 		setKeybindings(keys);
-		const tui = { terminal: { rows: 24 }, requestRender: vi.fn() } as unknown as TUI;
-		const questions: QuestionParams = {
-			questions: [
-				{
-					...params.questions[0],
-					options: params.questions[0].options.map((option) => ({
-						...option,
-						description: "Long description ".repeat(120),
-						preview: undefined,
-					})),
-				},
-			],
-		};
-		const done = vi.fn();
-		const view = new QuestionnaireView(tui, theme, keys, questions, done);
-		view.focused = true;
-		view.render(80);
-		view.handleInput("\x1b[B");
-		view.handleInput("\x1b[B");
-		view.handleInput("\r");
-		const lines = view.render(80);
-		expect(lines.length).toBeLessThanOrEqual(22);
-		expect(lines.join("\n")).toContain("Your answer:");
-		expect(lines.join("\n")).toContain(CURSOR_MARKER);
-		view.handleInput("custom preference");
-		view.handleInput("\r");
-		setKeybindings(previousKeys);
-		expect(done).toHaveBeenCalledWith(
-			expect.objectContaining({
-				cancelled: false,
-				answers: [expect.objectContaining({ kind: "custom", answer: "custom preference" })],
-			}),
-		);
+		try {
+			const tui = { terminal: { rows: 24 }, requestRender: vi.fn() } as unknown as TUI;
+			const questions: QuestionParams = {
+				questions: [
+					{
+						...params.questions[0],
+						options: params.questions[0].options.map((option) => ({
+							...option,
+							description: "Long description ".repeat(120),
+							preview: undefined,
+						})),
+					},
+				],
+			};
+			const done = vi.fn();
+			const view = new QuestionnaireView(tui, theme, keys, questions, done);
+			view.focused = true;
+			expect(view.render(80)).toHaveLength(12);
+			view.handleInput("\x1b[B");
+			view.handleInput("\x1b[B");
+			view.handleInput("\r");
+			const lines = view.render(80);
+			expect(lines.join("\n")).toContain("Your answer:");
+			expect(lines.join("\n")).toContain(CURSOR_MARKER);
+			view.handleInput("custom preference");
+			view.handleInput("\r");
+			expect(done).toHaveBeenCalledWith(
+				expect.objectContaining({
+					cancelled: false,
+					answers: [expect.objectContaining({ kind: "custom", answer: "custom preference" })],
+				}),
+			);
+		} finally {
+			setKeybindings(previousKeys);
+		}
 	});
 	it("supports a single question without ambiguous singular parameters", () => {
 		expect(Compile(QuestionParamsSchema).Check(params)).toBe(true);
@@ -132,6 +134,33 @@ describe("ported ask-user plugin", () => {
 			const result = getToolResult(harness, "ask_user_question");
 			expect(result.isError).toBe(false);
 			expect(result.details).toMatchObject({ cancelled: false, answers: [{ answer: "Small patch" }] });
+		} finally {
+			harness.cleanup();
+		}
+	});
+	it("uses the inline editor area instead of covering terminal messages", async () => {
+		const harness = await createHarness({ extensionFactories: [createAskUserExtension()] });
+		try {
+			let customOptions: unknown;
+			await harness.session.bindExtensions({
+				mode: "tui",
+				uiContext: createTestUiContext({
+					custom: async <T>(_factory: unknown, options: unknown) => {
+						customOptions = options;
+						return { answers: [], cancelled: true } as T;
+					},
+				}),
+			});
+			const tool = harness.session.getToolDefinition("ask_user_question")!;
+			const result = await tool.execute(
+				"inline-question",
+				params,
+				undefined,
+				undefined,
+				harness.session.extensionRunner.createToolContext("inline-question", undefined),
+			);
+			expect(result.isError).toBeUndefined();
+			expect(customOptions).toEqual({ blocked: { kind: "question", message: "Which approach?" } });
 		} finally {
 			harness.cleanup();
 		}

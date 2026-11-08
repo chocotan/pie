@@ -72,7 +72,7 @@ export function createAskUserExtension(): ExtensionFactory {
 								if (signal?.aborted) abort();
 								return new QuestionnaireView(tui, theme, keys, params, finish);
 							},
-							{ overlay: true, overlayOptions: { anchor: "bottom-center", width: "100%", maxHeight: "100%" } },
+							{ blocked: { kind: "question", message: params.questions[0].question } },
 						);
 					}
 					signal?.throwIfAborted();

@@ -242,7 +242,7 @@ export class QuestionnaireView implements Component, Focusable {
 			"",
 			th.fg("muted", truncateToWidth("Select / confirm · Next / previous question · Cancel", width, "…")),
 		);
-		const height = Math.max(1, this.tui.terminal.rows - 2);
+		const height = Math.max(1, Math.min(12, this.tui.terminal.rows - 2));
 		const focus = this.editing
 			? this.inputRow
 			: (this.rowPositions.find((position) => position.row === this.row)?.from ?? 0);
