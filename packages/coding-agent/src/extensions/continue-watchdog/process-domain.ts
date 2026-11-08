@@ -1,3 +1,8 @@
+/**
+ * Optional cross-process coordinator, kept for injected lifecycle tests.
+ * Production continue-watchdog is process-local and never opens this transport,
+ * so it does not read or write PI_EXTENSION_UTILS_PROCESS_DOMAIN.
+ */
 import {
 	ENV_NAMES,
 	isProcessDomainOpenError,
@@ -344,18 +349,6 @@ export function createProcessDomainCoordinator(
 			});
 		},
 	};
-}
-
-const PROCESS_DOMAIN_COORDINATOR = Symbol.for("pi-continue-watchdog:process-domain-coordinator:v3");
-
-type CoordinatorHost = typeof globalThis & {
-	[PROCESS_DOMAIN_COORDINATOR]?: ProcessDomainCoordinator;
-};
-
-export function getProcessDomainCoordinator(): ProcessDomainCoordinator {
-	const host = globalThis as CoordinatorHost;
-	host[PROCESS_DOMAIN_COORDINATOR] ??= createProcessDomainCoordinator();
-	return host[PROCESS_DOMAIN_COORDINATOR];
 }
 
 export { ENV_NAMES };

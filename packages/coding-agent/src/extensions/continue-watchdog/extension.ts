@@ -9,9 +9,9 @@ import type { ContinueWatchdogConfig } from "./config.ts";
 import type { LoadedConfig, LoadRuntimeConfigOptions } from "./config-loader.ts";
 import { registerDecisionContextFolding } from "./context-fold.ts";
 import type { LockDecisionController } from "./controller.ts";
-import { createFatalExitAdapter, type FatalExitAdapter } from "./fatal-exit.ts";
+import type { FatalExitAdapter } from "./fatal-exit.ts";
 import { createHubAttachmentInstance, getProcessObservableAgentHub, type ObservableAgentHub } from "./hub.ts";
-import { getProcessDomainCoordinator, type ProcessDomainCoordinator } from "./process-domain.ts";
+import type { ProcessDomainCoordinator } from "./process-domain.ts";
 import { createDecisionRuntime, type RuntimeClock, type RuntimeControllerHolder } from "./runtime.ts";
 import { projectBranchPreparation, projectCompactionPreparation } from "./summary-projection.ts";
 
@@ -34,10 +34,10 @@ export function createContinueWatchdogExtension(
 	options: ContinueWatchdogExtensionOptions = {},
 ): (pi: ExtensionAPI) => void {
 	const hub = options.hub ?? getProcessObservableAgentHub();
-	const useProductionDomain =
-		options.processDomain !== undefined || (options.hub === undefined && options.controller === undefined);
-	const processDomain = useProductionDomain ? (options.processDomain ?? getProcessDomainCoordinator()) : undefined;
-	const fatalExit = useProductionDomain ? (options.fatalExit ?? createFatalExitAdapter()) : options.fatalExit;
+	// Production is process-local: no cross-process transport, so the watchdog
+	// neither reads nor writes PI_EXTENSION_UTILS_PROCESS_DOMAIN.
+	const processDomain = options.processDomain;
+	const fatalExit = options.fatalExit;
 	const attachmentInstance = createHubAttachmentInstance();
 	const holder: RuntimeControllerHolder = {
 		controller: options.controller ?? null,

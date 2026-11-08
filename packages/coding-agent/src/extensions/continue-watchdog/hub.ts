@@ -2,7 +2,6 @@
  * Process-local registry for extension-loaded agents.
  *
  * This registry elects one local main and tracks same-process attachment state.
- * Cross-process aggregate activity is owned by src/process-domain.ts.
  * Runtime wiring binds once per attachment lifecycle and reuses the returned
  * opaque handle for busy/idle/detach. This module knows nothing about Pi hooks,
  * timers, or lock state.

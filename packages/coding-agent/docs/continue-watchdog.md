@@ -27,9 +27,9 @@ so the task in progress finishes. An inquiry that is still open is cancelled.
 ## What a cycle does
 
 1. **Qualify idle.** Real user work, or `/lock-continue-watchdog`, starts a
-   cycle. Every loaded attachment in this process counts as activity. A fixed
-   ten-second fence after the last activity must expire before anything is
-   asked.
+   cycle. Every loaded attachment in this process counts as activity; activity
+   in other Pi processes is not aggregated. A fixed ten-second fence after the
+   last activity must expire before anything is asked.
 2. **Ask privately.** The model gets the full active conversation in a forked
    child session using the configured `model`, or the main session's provider,
    model, and thinking level when unset. Its only allowed effect is one guarded
