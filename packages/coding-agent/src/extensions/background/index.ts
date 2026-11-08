@@ -1,6 +1,6 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import { getAgentDir } from "../../config.ts";
+import { StringEnum } from "../../core/extensions/pi-ai-extension-view.ts";
 import type {
 	ExtensionAPI,
 	ExtensionContext,

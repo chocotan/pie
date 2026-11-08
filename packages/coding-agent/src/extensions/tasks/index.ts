@@ -1,6 +1,6 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
+import { StringEnum } from "../../core/extensions/pi-ai-extension-view.ts";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 import type { ReadonlySessionManager } from "../../core/session-manager.ts";
 import { TaskDetailView, TodoPanel } from "./view.ts";

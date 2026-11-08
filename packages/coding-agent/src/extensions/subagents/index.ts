@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { AgentMessage, AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { TUI } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { getAgentDir } from "../../config.ts";
 import type { AgentSession } from "../../core/agent-session.ts";
+import { StringEnum } from "../../core/extensions/pi-ai-extension-view.ts";
 import type {
 	ExtensionContext,
 	ExtensionFactory,
