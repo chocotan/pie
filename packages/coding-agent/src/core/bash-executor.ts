@@ -6,7 +6,7 @@
  * - Direct calls from modes that need bash execution
  */
 
-import type { WriteStream } from "node:fs";
+import { rmSync, type WriteStream } from "node:fs";
 import { splitIncompleteAnsiSuffix, stripAnsi } from "../utils/ansi.ts";
 import { createOutputFileStream } from "../utils/output-files.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
@@ -57,15 +57,35 @@ export async function executeBashWithOperations(
 
 	let tempFilePath: string | undefined;
 	let tempFileStream: WriteStream | undefined;
+	let tempFileFailed = false;
 	let totalBytes = 0;
 
 	const ensureTempFile = () => {
-		if (tempFilePath) {
+		if (tempFilePath || tempFileFailed) {
 			return;
 		}
-		({ path: tempFilePath, stream: tempFileStream } = createOutputFileStream("pi-bash", ".log"));
+		let path: string;
+		let stream: WriteStream;
+		try {
+			({ path, stream } = createOutputFileStream("pi-bash", ".log"));
+		} catch {
+			tempFileFailed = true;
+			return;
+		}
+		tempFilePath = path;
+		tempFileStream = stream;
+		stream.on("error", () => {
+			if (tempFileFailed) return;
+			tempFileFailed = true;
+			tempFilePath = undefined;
+			tempFileStream = undefined;
+			try {
+				rmSync(path, { force: true });
+			} catch {}
+			stream.destroy();
+		});
 		for (const chunk of outputChunks) {
-			tempFileStream.write(chunk);
+			stream.write(chunk);
 		}
 	};
 

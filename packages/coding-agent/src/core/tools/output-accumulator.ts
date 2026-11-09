@@ -1,4 +1,4 @@
-import type { WriteStream } from "node:fs";
+import { rmSync, type WriteStream } from "node:fs";
 import { open } from "node:fs/promises";
 import { createOutputFileStream } from "../../utils/output-files.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
@@ -53,6 +53,7 @@ export class OutputAccumulator {
 
 	private tempFilePath: string | undefined;
 	private tempFileStream: WriteStream | undefined;
+	private tempFileFailed = false;
 
 	constructor(options: OutputAccumulatorOptions = {}) {
 		this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
@@ -114,29 +115,26 @@ export class OutputAccumulator {
 		return {
 			content: truncation.content,
 			truncation,
-			fullOutputPath: this.tempFilePath,
+			fullOutputPath: this.tempFileFailed ? undefined : this.tempFilePath,
 		};
 	}
 
 	async closeTempFile(): Promise<void> {
-		if (!this.tempFileStream) {
+		const stream = this.tempFileStream;
+		if (!stream) {
 			return;
 		}
 
-		const stream = this.tempFileStream;
 		this.tempFileStream = undefined;
 
-		await new Promise<void>((resolve, reject) => {
-			const onError = (error: Error) => {
-				stream.off("finish", onFinish);
-				reject(error);
-			};
-			const onFinish = () => {
-				stream.off("error", onError);
+		await new Promise<void>((resolve) => {
+			const done = () => {
+				stream.off("finish", done);
+				stream.off("error", done);
 				resolve();
 			};
-			stream.once("error", onError);
-			stream.once("finish", onFinish);
+			stream.once("finish", done);
+			stream.once("error", done);
 			stream.end();
 		});
 	}
@@ -147,6 +145,9 @@ export class OutputAccumulator {
 	 * last `maxBytes / 2` bytes around an omission marker.
 	 */
 	async readFullOutput(maxBytes: number): Promise<FullOutput> {
+		if (this.tempFileFailed) {
+			return { content: "[full output unavailable: temporary output file could not be written]", truncated: true };
+		}
 		if (!this.tempFilePath) {
 			return { content: new TextDecoder().decode(Buffer.concat(this.rawChunks)), truncated: false };
 		}
@@ -243,14 +244,34 @@ export class OutputAccumulator {
 	}
 
 	private ensureTempFile(): void {
-		if (this.tempFilePath) {
+		if (this.tempFilePath || this.tempFileFailed) {
 			return;
 		}
-		const { path, stream } = createOutputFileStream(this.tempFilePrefix, ".log");
+		let path: string;
+		let stream: WriteStream;
+		try {
+			({ path, stream } = createOutputFileStream(this.tempFilePrefix, ".log"));
+		} catch {
+			this.tempFileFailed = true;
+			this.rawChunks = [];
+			return;
+		}
 		this.tempFilePath = path;
 		this.tempFileStream = stream;
+		// Losing the full-output file must not kill the session: drop it and
+		// keep the bounded tail that is already in memory.
+		stream.on("error", () => {
+			if (this.tempFileFailed) return;
+			this.tempFileFailed = true;
+			this.tempFileStream = undefined;
+			this.tempFilePath = undefined;
+			try {
+				rmSync(path, { force: true });
+			} catch {}
+			stream.destroy();
+		});
 		for (const chunk of this.rawChunks) {
-			this.tempFileStream.write(chunk);
+			stream.write(chunk);
 		}
 		this.rawChunks = [];
 	}

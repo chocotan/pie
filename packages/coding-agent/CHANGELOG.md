@@ -15,6 +15,7 @@
 ### Fixed
 
 - Continue watchdog now tracks activity only in the current process and no longer reads or writes `PI_EXTENSION_UTILS_PROCESS_DOMAIN`. This removes the startup failure `Continue watchdog process domain failed (CONNECTION_UNAVAILABLE)` after a stale declaration survived in a shell or tmux server.
+- A failed write to a tool's full-output temp file, for example when the OS temp directory is out of quota, no longer crashes Pie. The tool result keeps its bounded tail and omits the full-output path instead.
 - Built-in background, task, and subagent schemas use the coding agent's TypeBox `StringEnum` again after the upstream pi-ai helper moved to pi-schema, so the coding-agent build succeeds.
 - Restored `truncateMiddle` for inherited and returned subagent text after an upstream refactor removed the helper while its subagent callers remained, which stopped source checkouts from starting.
 - A failed token refresh of an MCP connection no longer registers an OAuth client or replaces the PKCE verifier of a sign-in in progress, which made that sign-in fail. MCP sign-in now refreshes the stored tokens with the stored client even when the loopback callback port changed, instead of registering a new client and opening the browser. Ctrl+C in `/mcp` and the `--timeout` of `pi mcp login` now also stop a sign-in while it waits up to 25 seconds for another pi process's token refresh, and a refresh lock that fails for another reason than that wait now fails the sign-in instead of opening the browser.
