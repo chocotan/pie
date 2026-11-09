@@ -258,6 +258,10 @@ export class OutputAccumulator {
 		}
 		this.tempFilePath = path;
 		this.tempFileStream = stream;
+		let opened = false;
+		stream.once("open", () => {
+			opened = true;
+		});
 		// Losing the full-output file must not kill the session: drop it and
 		// keep the bounded tail that is already in memory.
 		stream.on("error", () => {
@@ -265,9 +269,12 @@ export class OutputAccumulator {
 			this.tempFileFailed = true;
 			this.tempFileStream = undefined;
 			this.tempFilePath = undefined;
-			try {
-				rmSync(path, { force: true });
-			} catch {}
+			// A failed open (for example EEXIST) did not create this path.
+			if (opened) {
+				try {
+					rmSync(path, { force: true });
+				} catch {}
+			}
 			stream.destroy();
 		});
 		for (const chunk of this.rawChunks) {

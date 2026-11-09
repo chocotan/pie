@@ -74,14 +74,21 @@ export async function executeBashWithOperations(
 		}
 		tempFilePath = path;
 		tempFileStream = stream;
+		let opened = false;
+		stream.once("open", () => {
+			opened = true;
+		});
 		stream.on("error", () => {
 			if (tempFileFailed) return;
 			tempFileFailed = true;
 			tempFilePath = undefined;
 			tempFileStream = undefined;
-			try {
-				rmSync(path, { force: true });
-			} catch {}
+			// A failed open (for example EEXIST) did not create this path.
+			if (opened) {
+				try {
+					rmSync(path, { force: true });
+				} catch {}
+			}
 			stream.destroy();
 		});
 		for (const chunk of outputChunks) {
