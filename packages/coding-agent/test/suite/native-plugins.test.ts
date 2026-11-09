@@ -331,13 +331,7 @@ describe("native subagents plugin", () => {
 					fauxToolCall("Agent", { prompt: "Read a file", max_turns: 1, run_in_background: true }),
 					{ stopReason: "toolUse" },
 				),
-				response,
-				response,
-				response,
-				response,
-				response,
-				response,
-				response,
+				...Array.from({ length: 14 }, () => response),
 			]);
 			await harness.session.prompt("Delegate in the background");
 			const record = getToolResult(harness, "Agent").details as SubagentRecord;
@@ -357,7 +351,7 @@ describe("native subagents plugin", () => {
 				),
 			).toMatchObject({
 				content: expect.stringContaining("Subagent turn limit reached"),
-				details: { status: "stopped", stopReason: "Subagent turn limit reached", turns: 6 },
+				details: { status: "stopped", stopReason: "Subagent turn limit reached", turns: 11 },
 			});
 			const notification = harness.session.messages.find(
 				(message) => message.role === "custom" && message.customType === "pie.subagent-completion",

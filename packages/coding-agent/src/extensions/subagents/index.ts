@@ -56,7 +56,7 @@ export function sortSubagents(records: readonly SubagentRecord[]): SubagentRecor
 }
 
 const DEFAULT_MAX_TURNS = 30;
-const WRAP_UP_GRACE_TURNS = 5;
+const WRAP_UP_GRACE_TURNS = 10;
 const WRAP_UP_MESSAGE = "You have reached your turn limit. Wrap up immediately — provide your final answer now.";
 
 const agentParams = Type.Object({
@@ -73,7 +73,7 @@ const agentParams = Type.Object({
 			maximum: 1000,
 			default: DEFAULT_MAX_TURNS,
 			description:
-				"Maximum turns before the subagent is asked to wrap up; five more turns are allowed before it is stopped",
+				"Maximum turns before the subagent is asked to wrap up; ten more turns are allowed before it is stopped",
 		}),
 	),
 	run_in_background: Type.Optional(Type.Boolean({ default: true })),
@@ -708,7 +708,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						minimum: 1,
 						maximum: 1000,
 						description:
-							"Maximum turns before the subagent is asked to wrap up; five more turns are allowed before it is stopped",
+							"Maximum turns before the subagent is asked to wrap up; ten more turns are allowed before it is stopped",
 					}),
 				),
 			}),

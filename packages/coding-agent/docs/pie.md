@@ -80,7 +80,7 @@ Tools:
 - `stop_subagent`: stop queued or running work.
 - `TaskExecute`, `TaskOutput`, `TaskStop`: connect a task with an `agentType` to a delegated run.
 
-TUI and RPC sessions default to background execution and receive completion notifications. Print and JSON invocations default to foreground execution; they cannot leave a child running after their process exits. Set `run_in_background: false` explicitly to join an Agent run. Four runs execute concurrently; additional runs queue. The default turn limit is 30; at the limit the subagent is asked to wrap up and gets five more turns to return a final answer before it is stopped. Errors, cancellation, or truncated output do not complete linked tasks.
+TUI and RPC sessions default to background execution and receive completion notifications. Print and JSON invocations default to foreground execution; they cannot leave a child running after their process exits. Set `run_in_background: false` explicitly to join an Agent run. Four runs execute concurrently; additional runs queue. The default turn limit is 30; at the limit the subagent is asked to wrap up and gets ten more turns to return a final answer before it is stopped. Errors, cancellation, or truncated output do not complete linked tasks.
 
 `TaskOutput` defaults to waiting up to 30,000ms. Its `timeout` is in milliseconds, up to 600,000; `block: false` or `timeout: 0` returns current state immediately.
 
