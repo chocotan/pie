@@ -25,7 +25,7 @@ import tasksPlugin, {
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
 import { raceWithAbortSignal } from "../../src/utils/abort.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
-import { createHarness, createTestUiContext, getToolResult } from "./harness.ts";
+import { createHarness, createTestUiContext, getMessageText, getToolResult } from "./harness.ts";
 
 const task = (id: string, status: TaskRecord["status"] = "pending"): TaskRecord => ({
 	id,
@@ -229,7 +229,7 @@ describe("native tasks plugin", () => {
 });
 
 describe("native subagents plugin", () => {
-	it.each(["Agent", "TaskExecute"])("stops %s at the turn limit without an execution error", async (toolName) => {
+	it.each(["Agent", "TaskExecute"])("wraps up %s at the turn limit instead of aborting", async (toolName) => {
 		const abort = vi.spyOn(AgentSession.prototype, "abort");
 		const read = vi.fn(async () => ({
 			content: [{ type: "text" as const, text: "file contents" }],
@@ -247,6 +247,22 @@ describe("native subagents plugin", () => {
 				nextId: 2,
 				tasks: [{ ...task("1"), agentType: "worker" }],
 			});
+			const response: FauxResponseFactory = (context) => {
+				const system = context.messages.find((message) => message.role === "system");
+				if (
+					system?.role !== "system" ||
+					!getSystemMessageText(system).includes("You are an isolated worker subagent")
+				)
+					return fauxAssistantMessage("Parent done");
+				const wrappingUp = context.messages.some(
+					(message) => message.role === "user" && getMessageText(message).includes("turn limit"),
+				);
+				return wrappingUp
+					? fauxAssistantMessage("Wrapped up findings")
+					: fauxAssistantMessage([{ type: "text", text: "Partial findings" }, fauxToolCall("read", {})], {
+							stopReason: "toolUse",
+						});
+			};
 			harness.setResponses([
 				fauxAssistantMessage(
 					fauxToolCall(
@@ -257,11 +273,10 @@ describe("native subagents plugin", () => {
 					),
 					{ stopReason: "toolUse" },
 				),
-				fauxAssistantMessage([{ type: "text", text: "Partial findings" }, fauxToolCall("read", {})], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage("Parent done"),
-				fauxAssistantMessage("Must not request another turn"),
+				response,
+				response,
+				response,
+				response,
 			]);
 			await harness.session.prompt("Delegate a file read");
 			const ctx = harness.session.extensionRunner.createToolContext("limit-test", undefined);
@@ -271,27 +286,25 @@ describe("native subagents plugin", () => {
 					: await harness.session
 							.getToolDefinition("TaskOutput")!
 							.execute("output", { task_id: "1" }, undefined, undefined, ctx);
-			if (toolName === "TaskExecute") expect(readTaskState(harness.sessionManager).tasks[0].status).toBe("pending");
+			if (toolName === "TaskExecute")
+				expect(readTaskState(harness.sessionManager).tasks[0].status).toBe("completed");
 			expect(result.isError).toBe(false);
 			expect(result.details).toMatchObject({
-				status: "stopped",
-				stopReason: "Subagent turn limit reached",
-				turns: 1,
+				status: "completed",
+				stopReason: "Subagent wrapped up at turn limit",
+				turns: 2,
 				maxTurns: 1,
 			});
 			expect((result.details as SubagentRecord).error).toBeUndefined();
-			expect(result.content).toEqual([
-				{ type: "text", text: expect.stringContaining("Subagent turn limit reached") },
-			]);
-			expect(abort).toHaveBeenCalledOnce();
+			expect(result.content).toEqual([{ type: "text", text: expect.stringContaining("Wrapped up findings") }]);
+			expect(abort).not.toHaveBeenCalled();
 			expect(read).toHaveBeenCalledOnce();
-			expect(harness.getPendingResponseCount()).toBe(1);
 		} finally {
 			abort.mockRestore();
 			harness.cleanup();
 		}
 	});
-	it("still delivers the automatic background notification after a turn-limit abort", async () => {
+	it("still delivers the automatic background notification after the wrap-up grace window", async () => {
 		const harness = await createHarness({
 			extensionFactories: [subagents()],
 			tools: [
@@ -322,6 +335,9 @@ describe("native subagents plugin", () => {
 				response,
 				response,
 				response,
+				response,
+				response,
+				response,
 			]);
 			await harness.session.prompt("Delegate in the background");
 			const record = getToolResult(harness, "Agent").details as SubagentRecord;
@@ -341,7 +357,7 @@ describe("native subagents plugin", () => {
 				),
 			).toMatchObject({
 				content: expect.stringContaining("Subagent turn limit reached"),
-				details: { status: "stopped", stopReason: "Subagent turn limit reached" },
+				details: { status: "stopped", stopReason: "Subagent turn limit reached", turns: 6 },
 			});
 			const notification = harness.session.messages.find(
 				(message) => message.role === "custom" && message.customType === "pie.subagent-completion",

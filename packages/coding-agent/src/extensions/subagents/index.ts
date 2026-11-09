@@ -55,6 +55,10 @@ export function sortSubagents(records: readonly SubagentRecord[]): SubagentRecor
 	return [...records].sort((a, b) => rank[a.status] - rank[b.status] || b.startedAt - a.startedAt);
 }
 
+const DEFAULT_MAX_TURNS = 30;
+const WRAP_UP_GRACE_TURNS = 5;
+const WRAP_UP_MESSAGE = "You have reached your turn limit. Wrap up immediately — provide your final answer now.";
+
 const agentParams = Type.Object({
 	prompt: Type.String({ minLength: 1, maxLength: 65536 }),
 	description: Type.Optional(Type.String({ maxLength: 400 })),
@@ -63,7 +67,15 @@ const agentParams = Type.Object({
 		Type.String({ description: "provider/model, or an unambiguous model ID; inherits the parent by default" }),
 	),
 	thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)),
-	max_turns: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000, default: 30 })),
+	max_turns: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: 1000,
+			default: DEFAULT_MAX_TURNS,
+			description:
+				"Maximum turns before the subagent is asked to wrap up; five more turns are allowed before it is stopped",
+		}),
+	),
 	run_in_background: Type.Optional(Type.Boolean({ default: true })),
 	inherit_context: Type.Optional(Type.Boolean({ default: false })),
 	resume: Type.Optional(Type.String({ description: "ID of a completed agent whose session should continue" })),
@@ -358,7 +370,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 				prompt: args.prompt,
 				status: "queued",
 				turns: 0,
-				maxTurns: args.max_turns ?? 30,
+				maxTurns: args.max_turns ?? DEFAULT_MAX_TURNS,
 				startedAt: Date.now(),
 				output: "",
 				model: `${model.provider}/${model.id}`,
@@ -451,9 +463,11 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						save(record);
 						refresh();
 						let turns = 0;
+						let wrapUpRequested = false;
+						const maxTurns = args.max_turns ?? DEFAULT_MAX_TURNS;
 						child.subscribe((event) => {
-							if (event.type === "turn_start") {
-								record.turns = Math.min((record.turns ?? 0) + 1, record.maxTurns ?? 30);
+							if (event.type === "turn_start" && !limitReached) {
+								record.turns = (record.turns ?? 0) + 1;
 								save(record);
 								refresh();
 							}
@@ -465,12 +479,17 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 							if (event.type === "tool_execution_end") record.activeTool = undefined;
 							if (
 								event.type === "turn_end" &&
-								++turns >= (args.max_turns ?? 30) &&
 								event.message.role === "assistant" &&
 								event.message.stopReason === "toolUse"
 							) {
-								limitReached = true;
-								void child?.abort();
+								turns++;
+								if (!wrapUpRequested && turns >= maxTurns) {
+									wrapUpRequested = true;
+									void child?.steer(WRAP_UP_MESSAGE).catch(() => {});
+								} else if (wrapUpRequested && turns >= maxTurns + WRAP_UP_GRACE_TURNS) {
+									limitReached = true;
+									void child?.abort();
+								}
 							}
 						});
 						// shortcut: inherited conversation is text-only and capped at 50KB; use the parent session file for full history.
@@ -487,11 +506,15 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 									? "error"
 									: "completed";
 						if (limitReached) record.stopReason = "Subagent turn limit reached";
-						else if (last?.role === "assistant")
-							record.error =
-								last.stopReason === "length"
-									? "Subagent response was truncated before completion"
-									: last.errorMessage;
+						else if (last?.role === "assistant") {
+							if (["error", "aborted", "length"].includes(last.stopReason))
+								record.error =
+									last.stopReason === "length"
+										? "Subagent response was truncated before completion"
+										: last.errorMessage;
+							else if (wrapUpRequested && !controller.signal.aborted)
+								record.stopReason = "Subagent wrapped up at turn limit";
+						}
 					} catch (error) {
 						record.status = controller.signal.aborted ? "stopped" : "error";
 						record.error = error instanceof Error ? error.message : String(error);
@@ -680,7 +703,14 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 				task_ids: Type.Array(Type.String(), { minItems: 1, maxItems: 32 }),
 				additional_context: Type.Optional(Type.String()),
 				model: Type.Optional(Type.String()),
-				max_turns: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+				max_turns: Type.Optional(
+					Type.Integer({
+						minimum: 1,
+						maximum: 1000,
+						description:
+							"Maximum turns before the subagent is asked to wrap up; five more turns are allowed before it is stopped",
+					}),
+				),
 			}),
 			executionMode: "sequential",
 			async execute(_id, args, signal, _update, ctx) {
