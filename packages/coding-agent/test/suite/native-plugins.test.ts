@@ -367,15 +367,20 @@ describe("native subagents plugin", () => {
 			harness.cleanup();
 		}
 	});
-	it("keeps provider failures classified as execution errors", async () => {
+	it("keeps provider failures classified as execution errors after retrying", async () => {
 		const harness = await createHarness({
 			extensionFactories: [subagents()],
 			settings: { retry: { enabled: false } },
 		});
+		vi.useFakeTimers();
 		try {
 			await harness.session.bindExtensions({});
-			harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid API key" })]);
-			const result = await harness.session
+			harness.setResponses(
+				Array.from({ length: 6 }, () =>
+					fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid API key" }),
+				),
+			);
+			const run = harness.session
 				.getToolDefinition("Agent")!
 				.execute(
 					"failed",
@@ -384,10 +389,46 @@ describe("native subagents plugin", () => {
 					undefined,
 					harness.session.extensionRunner.createToolContext("failure-test", undefined),
 				);
+			await vi.advanceTimersByTimeAsync(31_000);
+			const result = await run;
 			expect(result.isError).toBe(true);
-			expect(result.details).toMatchObject({ status: "error", error: "Invalid API key" });
+			expect(result.details).toMatchObject({
+				status: "error",
+				error: "Subagent failed after 5 retries: Invalid API key",
+			});
 			expect((result.details as SubagentRecord).stopReason).toBeUndefined();
 		} finally {
+			vi.useRealTimers();
+			harness.cleanup();
+		}
+	});
+	it("retries a transient subagent failure and returns the recovered result", async () => {
+		const harness = await createHarness({ extensionFactories: [subagents()] });
+		vi.useFakeTimers();
+		try {
+			await harness.session.bindExtensions({});
+			harness.setResponses([
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "network jitter" }),
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "network jitter" }),
+				fauxAssistantMessage("Recovered result"),
+			]);
+			const run = harness.session
+				.getToolDefinition("Agent")!
+				.execute(
+					"recovered",
+					{ prompt: "Return a result", max_turns: 5, run_in_background: false },
+					undefined,
+					undefined,
+					harness.session.extensionRunner.createToolContext("retry-test", undefined),
+				);
+			await vi.advanceTimersByTimeAsync(1_000);
+			await vi.advanceTimersByTimeAsync(2_000);
+			const result = await run;
+			expect(result.isError).toBe(false);
+			expect(result.details).toMatchObject({ status: "completed", output: "Recovered result" });
+			expect((result.details as SubagentRecord).error).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
 			harness.cleanup();
 		}
 	});

@@ -58,6 +58,17 @@ export function sortSubagents(records: readonly SubagentRecord[]): SubagentRecor
 const DEFAULT_MAX_TURNS = 30;
 const WRAP_UP_GRACE_TURNS = 10;
 const WRAP_UP_MESSAGE = "You have reached your turn limit. Wrap up immediately — provide your final answer now.";
+const SUBAGENT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
+
+/** Last assistant failure in this run, if the model ended with a provider error. */
+function lastAssistantFailure(child: AgentSession, startIndex: number): string | undefined {
+	for (let index = child.messages.length - 1; index >= startIndex; index--) {
+		const message = child.messages[index];
+		if (message.role !== "assistant") continue;
+		return message.stopReason === "error" ? message.errorMessage?.trim() || "provider error" : undefined;
+	}
+	return undefined;
+}
 
 const agentParams = Type.Object({
 	prompt: Type.String({ minLength: 1, maxLength: 65536 }),
@@ -496,24 +507,51 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						const prompt = parentHistory
 							? `${truncateMiddle(parentHistory, 50 * 1024).content}\n\nDelegated task:\n${args.prompt}`
 							: args.prompt;
-						await child.prompt(prompt, { expandPromptTemplates: false });
+						const runStart = child.messages.length;
+						let failure: string | undefined;
+						let retries = 0;
+						while (true) {
+							try {
+								await child.prompt(
+									retries === 0
+										? prompt
+										: `The previous request failed (${failure}). Continue the same task without repeating completed work.`,
+									{ expandPromptTemplates: false },
+								);
+								failure = lastAssistantFailure(child, runStart);
+							} catch (error) {
+								if (controller.signal.aborted || limitReached) throw error;
+								failure = error instanceof Error ? error.message : String(error);
+							}
+							if (failure === undefined || limitReached || retries >= SUBAGENT_RETRY_DELAYS_MS.length) break;
+							const delayMs = SUBAGENT_RETRY_DELAYS_MS[retries++];
+							await raceWithAbortSignal(
+								new Promise<void>((resolve) => setTimeout(resolve, delayMs)),
+								controller.signal,
+							);
+						}
 						record.output = truncateMiddle(child.getLastAssistantText() ?? "", 32 * 1024).content;
 						const last = child.messages.findLast((message) => message.role === "assistant");
-						record.status =
-							controller.signal.aborted || limitReached
-								? "stopped"
-								: last?.role === "assistant" && ["error", "aborted", "length"].includes(last.stopReason)
+						if (controller.signal.aborted || limitReached) {
+							record.status = "stopped";
+							if (limitReached) record.stopReason = "Subagent turn limit reached";
+						} else if (failure) {
+							record.status = "error";
+							record.error = retries > 0 ? `Subagent failed after ${retries} retries: ${failure}` : failure;
+						} else {
+							record.status =
+								last?.role === "assistant" && ["error", "aborted", "length"].includes(last.stopReason)
 									? "error"
 									: "completed";
-						if (limitReached) record.stopReason = "Subagent turn limit reached";
-						else if (last?.role === "assistant") {
-							if (["error", "aborted", "length"].includes(last.stopReason))
-								record.error =
-									last.stopReason === "length"
-										? "Subagent response was truncated before completion"
-										: last.errorMessage;
-							else if (wrapUpRequested && !controller.signal.aborted)
-								record.stopReason = "Subagent wrapped up at turn limit";
+							if (last?.role === "assistant") {
+								if (["error", "aborted", "length"].includes(last.stopReason))
+									record.error =
+										last.stopReason === "length"
+											? "Subagent response was truncated before completion"
+											: last.errorMessage;
+								else if (wrapUpRequested && !controller.signal.aborted)
+									record.stopReason = "Subagent wrapped up at turn limit";
+							}
 						}
 					} catch (error) {
 						record.status = controller.signal.aborted ? "stopped" : "error";
