@@ -51,11 +51,22 @@ const validateRecord = Compile(recordSchema);
 export type SubagentRecord = Static<typeof recordSchema>;
 
 export function sortSubagents(records: readonly SubagentRecord[]): SubagentRecord[] {
-	const rank = { running: 0, queued: 1, error: 2, stopped: 2, interrupted: 2, completed: 3 };
-	return [...records].sort((a, b) => rank[a.status] - rank[b.status] || b.startedAt - a.startedAt);
+	return [...records].sort(
+		(a, b) => Number(b.status === "running") - Number(a.status === "running") || b.startedAt - a.startedAt,
+	);
 }
 
 const DEFAULT_MAX_TURNS = 30;
+const DEFAULT_TIMEOUT_SECONDS = 1800;
+const subagentTimeout = Type.Optional(
+	Type.Number({
+		minimum: 0,
+		maximum: 2_147_483.647,
+		default: DEFAULT_TIMEOUT_SECONDS,
+		description:
+			"Runtime limit in seconds per subagent, measured from when it leaves the queue. Set 0 for no timeout.",
+	}),
+);
 const WRAP_UP_GRACE_TURNS = 10;
 const WRAP_UP_MESSAGE = "You have reached your turn limit. Wrap up immediately — provide your final answer now.";
 const SUBAGENT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
@@ -87,6 +98,7 @@ const agentParams = Type.Object({
 				"Maximum turns before the subagent is asked to wrap up; ten more turns are allowed before it is stopped",
 		}),
 	),
+	timeout_seconds: subagentTimeout,
 	run_in_background: Type.Optional(Type.Boolean({ default: true })),
 	inherit_context: Type.Optional(Type.Boolean({ default: false })),
 	resume: Type.Optional(Type.String({ description: "ID of a completed agent whose session should continue" })),
@@ -116,6 +128,17 @@ interface Run {
 	execute: () => Promise<void>;
 }
 const codingToolNames = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "powershell"]);
+
+function resultText(record: SubagentRecord): string {
+	return [
+		record.stopReason,
+		record.error,
+		record.output || (record.error ? undefined : "No output yet"),
+		record.sessionFile && `Full session: ${record.sessionFile}`,
+	]
+		.filter(Boolean)
+		.join("\n");
+}
 
 export function createSubagentsExtension(options: { agentDir?: string } = {}): ExtensionFactory {
 	return (pi) => {
@@ -153,7 +176,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 		const viewResult = (record: SubagentRecord) =>
 			pi.sendMessage({
 				customType: "pie.subagent-result",
-				content: `${record.agent} · ${record.status}\n${record.stopReason ? `${record.stopReason}\n` : ""}${record.output || record.error || "No output yet"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
+				content: `${record.agent} · ${record.status}\n${resultText(record)}`,
 				display: true,
 				details: record,
 			});
@@ -436,8 +459,15 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 				resolve,
 				reject,
 				execute: async () => {
+					const timeoutSeconds = args.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS;
+					const timeoutError = new Error(`Subagent timed out after ${timeoutSeconds}s`);
+					const timeout =
+						timeoutSeconds > 0
+							? setTimeout(() => controller.abort(timeoutError), timeoutSeconds * 1000)
+							: undefined;
 					let child: AgentSession | undefined;
 					let usageStart = 0;
+					let runStart = 0;
 					let limitReached = false;
 					const abort = () => {
 						if (child) void child.abort();
@@ -479,6 +509,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 							customTools: tools,
 						}));
 						run.child = child;
+						runStart = child.messages.length;
 						record.thinking = child.thinkingLevel;
 						record.sessionFile = manager.getSessionFile();
 						record.status = "running";
@@ -490,6 +521,8 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						let wrapUpRequested = false;
 						const maxTurns = args.max_turns ?? DEFAULT_MAX_TURNS;
 						child.subscribe((event) => {
+							// Cancellation during prompt preflight can arrive before the child has a live run.
+							if (event.type === "agent_start" && controller.signal.aborted) abort();
 							if (event.type === "turn_start" && !limitReached) {
 								record.turns = (record.turns ?? 0) + 1;
 								save(record);
@@ -520,10 +553,10 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						const prompt = parentHistory
 							? `${truncateMiddle(parentHistory, 50 * 1024).content}\n\nDelegated task:\n${args.prompt}`
 							: args.prompt;
-						const runStart = child.messages.length;
 						let failure: string | undefined;
 						let retries = 0;
 						while (true) {
+							controller.signal.throwIfAborted();
 							try {
 								await child.prompt(
 									retries === 0
@@ -543,7 +576,6 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 								controller.signal,
 							);
 						}
-						record.output = truncateMiddle(child.getLastAssistantText() ?? "", 32 * 1024).content;
 						const last = child.messages.findLast((message) => message.role === "assistant");
 						if (controller.signal.aborted || limitReached) {
 							record.status = "stopped";
@@ -570,8 +602,26 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						record.status = controller.signal.aborted ? "stopped" : "error";
 						record.error = error instanceof Error ? error.message : String(error);
 					} finally {
+						clearTimeout(timeout);
 						controller.signal.removeEventListener("abort", abort);
+						const timedOut = controller.signal.reason === timeoutError;
+						if (timedOut) {
+							record.status = "error";
+							record.error = timeoutError.message;
+						}
 						if (child) {
+							const last = child.messages.findLast((message, index) => {
+								if (index < runStart || message.role !== "assistant") return false;
+								return timedOut
+									? message.content.some((block) => block.type === "text" && block.text.trim())
+									: message.stopReason !== "aborted" || message.content.length > 0;
+							});
+							if (last?.role === "assistant") {
+								const text = last.content
+									.flatMap((block) => (block.type === "text" ? [block.text] : []))
+									.join("");
+								record.output = truncateMiddle(text.trim(), 32 * 1024).content;
+							}
 							transcripts.set(record.id, [...child.messages]);
 							for (const entry of child.sessionManager.getEntries().slice(usageStart)) {
 								if (entry.type === "message" && entry.message.role === "assistant")
@@ -594,7 +644,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 							pi.sendMessage(
 								{
 									customType: "pie.subagent-completion",
-									content: `Subagent ${record.id} (${record.agent}) ${record.status}.\n${record.stopReason ? `${record.stopReason}\n` : ""}${record.output || record.error || "No output"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
+									content: `Subagent ${record.id} (${record.agent}) ${record.status}.\n${resultText(record)}`,
 									display: true,
 									details: record,
 								},
@@ -627,7 +677,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 			content: [
 				{
 					type: "text",
-					text: `${record.id} · ${record.agent} · ${record.status}\n${record.stopReason ? `${record.stopReason}\n` : ""}${record.output || record.error || "No output yet"}${record.sessionFile ? `\nFull session: ${record.sessionFile}` : ""}`,
+					text: `${record.id} · ${record.agent} · ${record.status}\n${resultText(record)}`,
 				},
 			],
 			details: structuredClone(record),
@@ -765,6 +815,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 							"Maximum turns before the subagent is asked to wrap up; ten more turns are allowed before it is stopped",
 					}),
 				),
+				timeout_seconds: subagentTimeout,
 			}),
 			executionMode: "sequential",
 			async execute(_id, args, signal, _update, ctx) {
@@ -793,6 +844,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 							subagent_type: task.agentType,
 							model: args.model,
 							max_turns: args.max_turns,
+							timeout_seconds: args.timeout_seconds,
 							run_in_background: background,
 						},
 						ctx,
@@ -821,6 +873,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 									taskId: record.taskId,
 									agentId: record.id,
 									status: record.status,
+									error: record.error,
 								})),
 								null,
 								2,

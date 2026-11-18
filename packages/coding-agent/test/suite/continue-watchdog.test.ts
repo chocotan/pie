@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_ACTIVITY_EVENT } from "../../src/extensions/background/registry.ts";
 import { mergeConfig } from "../../src/extensions/continue-watchdog/config.ts";
 import { createLockDecisionController } from "../../src/extensions/continue-watchdog/controller.ts";
-import { createObservableAgentHub } from "../../src/extensions/continue-watchdog/hub.ts";
+import { createHubAttachmentInstance, createObservableAgentHub } from "../../src/extensions/continue-watchdog/hub.ts";
 import { createContinueWatchdogExtension } from "../../src/extensions/continue-watchdog/index.ts";
 import * as privateDecision from "../../src/extensions/continue-watchdog/private-decision.ts";
 import { createTestExtensionsResult, createTestResourceLoader } from "../utilities.ts";
@@ -77,6 +77,48 @@ describe("bundled continue watchdog", () => {
 			expect(execute.mock.lastCall?.[0].fork.model).toBe(model ?? "other/config-model:low");
 		}
 		expect(execute).toHaveBeenCalledTimes(3);
+	});
+
+	it("preserves the countdown and private inquiry across duplicate idle observations", async () => {
+		vi.useFakeTimers();
+		const execute = vi.spyOn(privateDecision, "runPrivateDecision").mockImplementation(
+			({ signal }) =>
+				new Promise((resolve) => {
+					signal?.addEventListener("abort", () => resolve({ kind: "cancelled" }), { once: true });
+				}),
+		);
+		const hub = createObservableAgentHub();
+		const controller = createLockDecisionController({ maxContinue: 3 });
+		harness = await createHarness({ extensionFactories: [createContinueWatchdogExtension({ hub, controller })] });
+		await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext() });
+		harness.setResponses([fauxAssistantMessage("done")]);
+		await harness.session.prompt("do the work");
+		const { attachment } = hub.bind({ instance: createHubAttachmentInstance(), sessionId: "helper", hasUI: false });
+		await harness.session.prompt("/lock-continue-watchdog");
+
+		await vi.advanceTimersByTimeAsync(8_000);
+		await harness.session.extensionRunner.emit({
+			type: "message_start",
+			message: { role: "custom", customType: "test.ui", content: "", display: true, timestamp: Date.now() },
+		});
+		await vi.advanceTimersByTimeAsync(1_000);
+		hub.markIdle(attachment);
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(execute).toHaveBeenCalledOnce();
+
+		const signal = execute.mock.calls[0]?.[0].signal;
+		hub.markIdle(attachment);
+		expect(signal?.aborted).toBe(false);
+		hub.markBusy(attachment);
+		expect(signal?.aborted).toBe(true);
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(execute).toHaveBeenCalledOnce();
+		hub.markIdle(attachment);
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(execute).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(execute).toHaveBeenCalledTimes(2);
+		await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 	});
 
 	function notified(notify: ReturnType<typeof vi.fn>, text: string): boolean {

@@ -16,6 +16,7 @@ import {
 	type BackgroundTask,
 	MAX_LOG_BYTES,
 	readTaskLogs,
+	sortBackgroundTasks,
 } from "./registry.ts";
 import { renderBackgroundCompletion } from "./renderers.ts";
 import { BackgroundDetailView, BackgroundPanel } from "./view.ts";
@@ -29,7 +30,11 @@ const runSchema = Type.Object({
 			description: "Use the same syntax as this Pie shell tool; defaults to bash",
 		}),
 	),
-	timeoutSeconds: Type.Optional(Type.Number({ minimum: 0.001, maximum: 2147483.647 })),
+	timeoutSeconds: Type.Number({
+		minimum: 0,
+		maximum: 2_147_483.647,
+		description: "Maximum runtime in seconds. Set 0 for no timeout.",
+	}),
 	notifyOnCompletion: Type.Optional(Type.Boolean({ default: true })),
 	triggerOnCompletion: Type.Optional(Type.Boolean({ default: true })),
 	taskId: Type.Optional(
@@ -96,7 +101,7 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 			}
 		};
 		const all = async (ctx: ExtensionContext) => {
-			const tasks = current(ctx).list();
+			const tasks = sortBackgroundTasks(current(ctx).list());
 			if (!ctx.hasUI) {
 				pi.sendMessage({
 					customType: "pie.background-list",
@@ -258,7 +263,7 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 			annotations: { readOnlyHint: true },
 			async execute(_id, args, _signal, _update, ctx) {
 				const owner = current(ctx);
-				return result(args.taskId ? owner.resolve(args.taskId) : owner.list());
+				return result(args.taskId ? owner.resolve(args.taskId) : sortBackgroundTasks(owner.list()));
 			},
 		});
 		pi.registerTool({

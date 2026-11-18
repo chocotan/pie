@@ -39,6 +39,22 @@ afterEach(async () => {
 	await rm(directory, { recursive: true, force: true });
 });
 describe("background extension tool integration", () => {
+	it("requires an explicit timeout before starting a job", async () => {
+		harness = await createHarness({ extensionFactories: [createBackgroundExtension({ agentDir: directory })] });
+		await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext() });
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("bg_run", { command: "true", name: "Missing timeout" }), {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage(fauxToolCall("bg_status", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("Run a background job");
+		const result = getToolResult(harness, "bg_run");
+		expect(result.isError).toBe(true);
+		expect(result.content).toEqual([{ type: "text", text: expect.stringContaining("timeoutSeconds") }]);
+		expect(getToolResult(harness, "bg_status").details).toEqual([]);
+	});
 	it("launches through the local shell, notifies once after output closure, and reads logs through tools", async () => {
 		const setWidget = vi.fn();
 		harness = await createHarness({ extensionFactories: [createBackgroundExtension({ agentDir: directory })] });
@@ -60,6 +76,7 @@ describe("background extension tool integration", () => {
 				fauxToolCall("bg_run", {
 					command: "printf 'fixture stdout'; printf 'fixture stderr' >&2",
 					name: "Fixture",
+					timeoutSeconds: 30,
 					description: "Capture shell output",
 					triggerOnCompletion: false,
 				}),
@@ -119,6 +136,7 @@ describe("background extension tool integration", () => {
 					fauxToolCall("bg_run", {
 						command: `exec ${JSON.stringify(process.execPath)} -e 'setInterval(() => {}, 1000)'`,
 						name: "Owned wait",
+						timeoutSeconds: 0,
 						notifyOnCompletion: false,
 					}),
 					{ stopReason: "toolUse" },
@@ -150,6 +168,7 @@ describe("background extension tool integration", () => {
 					fauxToolCall("bg_run", {
 						command: `exec ${JSON.stringify(process.execPath)} -e 'setInterval(() => {}, 1000)'`,
 						name: "Reload fixture",
+						timeoutSeconds: 0,
 					}),
 					{ stopReason: "toolUse" },
 				),
@@ -198,9 +217,12 @@ describe("background extension tool integration", () => {
 		});
 		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("bg_run", { command: "fixture must never run", name: "Blocked" }), {
-				stopReason: "toolUse",
-			}),
+			fauxAssistantMessage(
+				fauxToolCall("bg_run", { command: "fixture must never run", name: "Blocked", timeoutSeconds: 0 }),
+				{
+					stopReason: "toolUse",
+				},
+			),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("Test permission hook");
@@ -229,9 +251,12 @@ describe("background extension tool integration", () => {
 		});
 		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("bg_run", { command: "fixture must never run", name: "Replaced" }), {
-				stopReason: "toolUse",
-			}),
+			fauxAssistantMessage(
+				fauxToolCall("bg_run", { command: "fixture must never run", name: "Replaced", timeoutSeconds: 0 }),
+				{
+					stopReason: "toolUse",
+				},
+			),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("Test shell replacement");
@@ -244,9 +269,12 @@ describe("background extension tool integration", () => {
 		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
 		harness.session.setActiveToolsByName(["read", "bg_run"]);
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("bg_run", { command: "fixture must never run", name: "Inactive shell" }), {
-				stopReason: "toolUse",
-			}),
+			fauxAssistantMessage(
+				fauxToolCall("bg_run", { command: "fixture must never run", name: "Inactive shell", timeoutSeconds: 0 }),
+				{
+					stopReason: "toolUse",
+				},
+			),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("Test inactive shell");
@@ -259,9 +287,12 @@ describe("background extension tool integration", () => {
 		for (const name of ["bg_run", "bg_status", "bg_logs", "bg_kill"])
 			expect(harness.session.getAllTools().some((tool) => tool.name === name)).toBe(true);
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("bg_run", { command: "fixture must never run", name: "Print" }), {
-				stopReason: "toolUse",
-			}),
+			fauxAssistantMessage(
+				fauxToolCall("bg_run", { command: "fixture must never run", name: "Print", timeoutSeconds: 0 }),
+				{
+					stopReason: "toolUse",
+				},
+			),
 			fauxAssistantMessage(fauxToolCall("bg_status", {}), { stopReason: "toolUse" }),
 			fauxAssistantMessage("done"),
 		]);
@@ -305,6 +336,7 @@ describe("background extension tool integration", () => {
 				fauxToolCall("bg_run", {
 					command: "printf linked",
 					name: "Linked",
+					timeoutSeconds: 0,
 					taskId: "1",
 					triggerOnCompletion: false,
 				}),
@@ -321,9 +353,12 @@ describe("background extension tool integration", () => {
 		});
 
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("bg_run", { command: "true", name: "Again", taskId: "1" }), {
-				stopReason: "toolUse",
-			}),
+			fauxAssistantMessage(
+				fauxToolCall("bg_run", { command: "true", name: "Again", taskId: "1", timeoutSeconds: 0 }),
+				{
+					stopReason: "toolUse",
+				},
+			),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("Link the completed task");

@@ -2354,10 +2354,15 @@ export function createDecisionRuntime(options: DecisionRuntimeOptions): Decision
 
 	observeAggregate = (): void => {
 		const input = aggregateInput();
-		graceCoordinator.update({
-			allIdle: input.allIdle,
-			generation: input.generation,
-		});
+		const observed = graceCoordinator.snapshot;
+		// Presentation-only messages can report the same idle period more than once.
+		if (
+			!input.allIdle ||
+			observed.phase === "blocked" ||
+			!sameActivityGeneration(observed.generation, input.generation)
+		) {
+			graceCoordinator.update({ allIdle: input.allIdle, generation: input.generation });
+		}
 		refreshStateStatus();
 	};
 
@@ -4061,8 +4066,8 @@ export function createDecisionRuntime(options: DecisionRuntimeOptions): Decision
 		if (attachment !== null) {
 			publishingOwnHubObservation = true;
 			try {
-				if (idle) options.hub.markIdle(attachment);
-				else options.hub.markBusy(attachment);
+				const transition = idle ? options.hub.markIdle(attachment) : options.hub.markBusy(attachment);
+				if (!transition.applied) syncHubState();
 			} finally {
 				publishingOwnHubObservation = false;
 			}

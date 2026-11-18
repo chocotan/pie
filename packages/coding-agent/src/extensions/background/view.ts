@@ -13,7 +13,7 @@ import { highlightHover } from "../../modes/interactive/components/hover-style.t
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { ToolTranscriptContainer } from "../../modes/interactive/components/tool-transcript.ts";
 import { theme } from "../../modes/interactive/theme/theme.ts";
-import { type BackgroundTask, readTaskLogs } from "./registry.ts";
+import { type BackgroundTask, readTaskLogs, sortBackgroundTasks } from "./registry.ts";
 
 export class BackgroundPanel implements Component {
 	private readonly ui: TUI;
@@ -46,9 +46,7 @@ export class BackgroundPanel implements Component {
 	render(width: number): string[] {
 		this.width = width;
 		this.rows = [];
-		const tasks = this.tasks().sort(
-			(a, b) => Number(b.status === "running") - Number(a.status === "running") || b.startedAt - a.startedAt,
-		);
+		const tasks = sortBackgroundTasks(this.tasks());
 		if (!tasks.length || width < 1) {
 			this.dispose();
 			return [];

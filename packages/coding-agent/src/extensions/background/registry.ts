@@ -49,7 +49,7 @@ export interface BackgroundTask {
 export interface StartOptions {
 	name: string;
 	description?: string;
-	timeoutSeconds?: number;
+	timeoutSeconds: number;
 	notifyOnCompletion?: boolean;
 	triggerOnCompletion?: boolean;
 	shell?: "bash" | "powershell";
@@ -64,6 +64,14 @@ interface Run {
 	stopping?: "user" | "shutdown" | "failure";
 	finalizing: boolean;
 }
+
+/** Running jobs first, then every settled job by start time, newest first. */
+export function sortBackgroundTasks(tasks: readonly BackgroundTask[]): BackgroundTask[] {
+	return [...tasks].sort(
+		(a, b) => Number(b.status === "running") - Number(a.status === "running") || b.startedAt - a.startedAt,
+	);
+}
+
 export interface RegistryOptions {
 	agentDir: string;
 	sessionId: string;
@@ -132,13 +140,9 @@ export class BackgroundRegistry {
 			throw new Error("Background command must be nonempty and contain no NUL bytes");
 		const name = taskLabel(options.name);
 		if (!name) throw new Error("Background task name must be nonempty");
-		if (
-			options.timeoutSeconds !== undefined &&
-			(!Number.isFinite(options.timeoutSeconds) ||
-				options.timeoutSeconds <= 0 ||
-				options.timeoutSeconds * 1000 > 2147483647)
-		)
-			throw new Error("Background timeout must be positive and at most 2147483.647 seconds");
+		const { timeoutSeconds } = options;
+		if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 2_147_483.647)
+			throw new Error("Background timeout must be between 0 and 2147483.647 seconds (0 disables the timeout)");
 		this.directory ??= this.createDirectory();
 		const directory = await this.directory;
 		check();
@@ -214,11 +218,8 @@ export class BackgroundRegistry {
 				child.stdin?.on("error", (error) => fail(`Command stdin failed: ${error.message}`));
 				child.stdin?.end(command);
 			}
-			if (options.timeoutSeconds !== undefined)
-				owned.timeout = setTimeout(
-					() => fail(`Timed out after ${options.timeoutSeconds}s`),
-					options.timeoutSeconds * 1000,
-				);
+			if (timeoutSeconds > 0)
+				owned.timeout = setTimeout(() => fail(`Timed out after ${timeoutSeconds}s`), timeoutSeconds * 1000);
 			const abort = () => {
 				owned.stopping = "user";
 				void this.requestStop(owned).catch((error: unknown) => this.options.onError?.(error));

@@ -6,6 +6,8 @@
 
 - Removed `readFile` from `GrepOperations`. The grep tool now takes context lines from ripgrep and no longer reads matched files itself. To search a remote system, override grep's `execute()`; see [Remote Execution](docs/extensions.md#remote-execution) ([#9276](https://github.com/earendil-works/pi/issues/9276))
 
+- `bg_run` requires `timeoutSeconds`. Pass `0` to run without a timeout.
+
 ### Added
 
 - `pi update` now lists each updated package with its npm version or git commit change, for example `npm:foo 1.2.0 -> 1.3.0`, and prints `Packages are already up to date` when nothing changed. When nothing changed but an update printed a warning, for example because npm left the old version installed after resolving stale registry metadata, it prints `No packages were updated, see the warnings above` instead; in offline mode it prints `Skipped package updates (offline mode)`. `PackageManager.update()` reports each changed package as a new `result` progress event whose `message` holds that line ([#11707](https://github.com/earendil-works/pi/pull/11707), [#11711](https://github.com/earendil-works/pi/pull/11711))
@@ -14,8 +16,15 @@
 - Added a built-in `goal` extension: one durable completion objective per session that keeps starting rounds after each settled turn until the goal is completed, paused, or the round cap (default 20) is reached. Rounds carry the objective and the task ledger; they wait for queued or running subagents and background shells, and `GoalUpdate complete` is rejected while tasks remain open. `/goal` sets, shows, pauses, resumes, completes, or clears it, and `GoalSet`, `GoalGet`, and `GoalUpdate` expose the same lifecycle to the model
 - `bg_run` accepts `taskId` and `Agent` accepts `task_id` to keep a linked task's status in step with a background job or a single delegated run. Both reject tasks that are not pending, and blocked tasks are rejected before the work starts
 
+- `Agent` and `TaskExecute` accept `timeout_seconds` for each subagent. The default is 1,800 seconds after leaving the queue, and `0` disables the deadline. On timeout, Pie cancels the run and reports the failure to the parent.
+
+### Changed
+
+- Background job and subagent lists show running work first and sort each group by start time, newest first. This order applies to both panels, `/jobs`, `/agents`, `bg_status`, and `list_subagents`.
+
 ### Fixed
 
+- Duplicate idle reports and presentation-only messages preserve the continue watchdog countdown. Redundant idle reports from other sessions also preserve a private decision already in progress.
 - Continue watchdog now tracks activity only in the current process and no longer reads or writes `PI_EXTENSION_UTILS_PROCESS_DOMAIN`. This removes the startup failure `Continue watchdog process domain failed (CONNECTION_UNAVAILABLE)` after a stale declaration survived in a shell or tmux server.
 - Subagents that reach their turn limit are now asked to wrap up and get ten more turns to return a final answer; only then are they stopped. A wrap-up that finishes is reported as `Subagent wrapped up at turn limit`.
 - Subagent provider failures are retried in the same child session up to five times with 1, 2, 4, 8, and 16 second delays. The run is marked failed only after every retry fails.

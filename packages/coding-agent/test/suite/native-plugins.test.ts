@@ -229,6 +229,94 @@ describe("native tasks plugin", () => {
 });
 
 describe("native subagents plugin", () => {
+	it.each([
+		{ toolName: "Agent", timeoutSeconds: 1800 },
+		{ toolName: "TaskExecute", timeoutSeconds: 5 },
+	])("cancels a stalled tool at the $toolName deadline", async ({ toolName, timeoutSeconds }) => {
+		const reading = Promise.withResolvers<AbortSignal | undefined>();
+		const never = new Promise<never>(() => {});
+		const harness = await createHarness({
+			extensionFactories: [tasksPlugin, subagents()],
+			tools: [
+				{
+					name: "read",
+					label: "Read",
+					description: "Read a file",
+					parameters: Type.Object({}),
+					async execute(_id, _args, signal) {
+						reading.resolve(signal);
+						return raceWithAbortSignal(never, signal);
+					},
+				},
+			],
+		});
+		vi.useFakeTimers();
+		try {
+			await harness.session.bindExtensions({ mode: "rpc", uiContext: createTestUiContext() });
+			harness.sessionManager.appendCustomEntry(TASK_STATE_ENTRY, {
+				nextId: 2,
+				tasks: [{ ...task("1"), agentType: "worker" }],
+			});
+			const response: FauxResponseFactory = (context) => {
+				const system = context.messages.find((message) => message.role === "system");
+				return system?.role === "system" &&
+					getSystemMessageText(system).includes("You are an isolated worker subagent")
+					? fauxAssistantMessage([{ type: "text", text: "Partial findings" }, fauxToolCall("read", {})], {
+							stopReason: "toolUse",
+						})
+					: fauxAssistantMessage("Parent is waiting");
+			};
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall(
+						toolName,
+						toolName === "Agent"
+							? { prompt: "Read a file", run_in_background: false }
+							: { task_ids: ["1"], timeout_seconds: timeoutSeconds },
+					),
+					{ stopReason: "toolUse" },
+				),
+				response,
+				response,
+			]);
+			const run = harness.session.prompt("Delegate a stalled read");
+			const signal = await reading.promise;
+			if (toolName === "TaskExecute") {
+				await run;
+				harness.setResponses([fauxAssistantMessage("The parent handled the timeout")]);
+			}
+			await vi.advanceTimersByTimeAsync(timeoutSeconds * 1000 - 1);
+			expect(signal?.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(signal?.aborted).toBe(true);
+			await run;
+			const expected = {
+				status: "error",
+				error: `Subagent timed out after ${timeoutSeconds}s`,
+				output: "Partial findings",
+			};
+			if (toolName === "Agent") {
+				const result = getToolResult(harness, "Agent");
+				expect(result.isError).toBe(true);
+				expect(result.details).toMatchObject(expected);
+				expect(getMessageText(result)).toContain(expected.error);
+			} else {
+				await harness.session.waitForIdle();
+				expect(readTaskState(harness.sessionManager).tasks[0].status).toBe("pending");
+				const notice = harness.session.messages.find(
+					(message) => message.role === "custom" && message.customType === "pie.subagent-completion",
+				);
+				expect(notice).toMatchObject({ details: expected });
+				expect(getMessageText(notice)).toContain(expected.error);
+				expect(harness.session.getLastAssistantText()).toBe("The parent handled the timeout");
+			}
+		} finally {
+			await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			vi.useRealTimers();
+			harness.cleanup();
+		}
+	});
+
 	it.each(["Agent", "TaskExecute"])("wraps up %s at the turn limit instead of aborting", async (toolName) => {
 		const abort = vi.spyOn(AgentSession.prototype, "abort");
 		const read = vi.fn(async () => ({
@@ -570,7 +658,7 @@ describe("native subagents plugin", () => {
 			harness.cleanup();
 		}
 	});
-	it("stops a delegated background task without completing the todo", async () => {
+	it("keeps an unlimited delegated task running until manually stopped", async () => {
 		const harness = await createHarness({
 			extensionFactories: [tasksPlugin, subagents()],
 			settings: { retry: { enabled: false } },
@@ -591,6 +679,7 @@ describe("native subagents plugin", () => {
 			}
 			return fauxAssistantMessage("parent done");
 		};
+		vi.useFakeTimers();
 		try {
 			await harness.session.bindExtensions({ mode: "rpc", uiContext: createTestUiContext() });
 			harness.sessionManager.appendCustomEntry(TASK_STATE_ENTRY, {
@@ -598,13 +687,17 @@ describe("native subagents plugin", () => {
 				tasks: [{ ...task("1"), agentType: "worker" }],
 			});
 			harness.setResponses([
-				fauxAssistantMessage(fauxToolCall("TaskExecute", { task_ids: ["1"] }), { stopReason: "toolUse" }),
+				fauxAssistantMessage(fauxToolCall("TaskExecute", { task_ids: ["1"], timeout_seconds: 0 }), {
+					stopReason: "toolUse",
+				}),
 				response,
 				response,
 				response,
 			]);
 			await harness.session.prompt("Execute task");
 			await childStarted;
+			await vi.advanceTimersByTimeAsync(1_801_000);
+			expect(readTaskState(harness.sessionManager).tasks[0].status).toBe("in_progress");
 			const ctx = harness.session.extensionRunner.createToolContext("stop-test", undefined);
 			const stop = harness.session.getToolDefinition("TaskStop")!;
 			const result = await stop.execute("stop", { task_id: "1" }, undefined, undefined, ctx);
@@ -613,6 +706,8 @@ describe("native subagents plugin", () => {
 			expect(readTaskState(harness.sessionManager).tasks[0].status).toBe("pending");
 			await harness.session.waitForIdle();
 		} finally {
+			await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			vi.useRealTimers();
 			harness.cleanup();
 		}
 	});
