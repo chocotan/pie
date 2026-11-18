@@ -159,6 +159,22 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 					pi.events.emit(BACKGROUND_ACTIVITY_EVENT, { running });
 				},
 				onError: report,
+				onStall: (task, idleSeconds) => {
+					const details = {
+						taskId: task.id,
+						description: task.description,
+						idleSeconds,
+						bytesWritten: task.bytesWritten,
+					};
+					const content = `Background job ${task.id} has produced no stdout or stderr for ${idleSeconds} seconds. It is still running. Inspect its status or logs with bg_status or bg_logs, then decide whether to keep it running, stop it, or continue independent work.\n${JSON.stringify(details)}`;
+					const busy = !ctx.isIdle();
+					pi.sendMessage(
+						{ customType: "pie.background-stalled", content, display: true, details },
+						{ deliverAs: "followUp", triggerTurn: task.notifyOnCompletion && task.triggerOnCompletion },
+					);
+					if (busy && ctx.hasUI)
+						ctx.ui.notify(`Background job ${task.name} has been silent for ${idleSeconds}s.`, "warning");
+				},
 				onCompletion: (task) => {
 					const link = taskLinks.get(task.id);
 					if (link) {

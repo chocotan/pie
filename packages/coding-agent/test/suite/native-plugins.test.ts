@@ -658,7 +658,7 @@ describe("native subagents plugin", () => {
 			harness.cleanup();
 		}
 	});
-	it("keeps an unlimited delegated task running until manually stopped", async () => {
+	it("wakes the parent about a stalled unlimited subagent and leaves it running", async () => {
 		const harness = await createHarness({
 			extensionFactories: [tasksPlugin, subagents()],
 			settings: { retry: { enabled: false } },
@@ -696,9 +696,43 @@ describe("native subagents plugin", () => {
 			]);
 			await harness.session.prompt("Execute task");
 			await childStarted;
-			await vi.advanceTimersByTimeAsync(1_801_000);
+			const agentId = readTaskState(harness.sessionManager).tasks[0].owner;
+			expect(agentId).toBeDefined();
+			const ctx = harness.session.extensionRunner.createToolContext("stall-test", undefined);
+			const waiting = [
+				harness.session
+					.getToolDefinition("get_subagent_result")!
+					.execute("agent-wait", { agent_id: agentId, wait: true }, undefined, undefined, ctx),
+				harness.session
+					.getToolDefinition("TaskOutput")!
+					.execute("task-wait", { task_id: "1", timeout: 600_000 }, undefined, undefined, ctx),
+			];
+			harness.setResponses([
+				(context) => {
+					const text = context.messages.map(getMessageText).join("\n");
+					expect(text).toContain("no model or tool progress for 300 seconds while waiting for the model");
+					return fauxAssistantMessage(fauxToolCall("TaskOutput", { task_id: "1", block: false }), {
+						stopReason: "toolUse",
+					});
+				},
+				fauxAssistantMessage("Parent inspected the subagent"),
+			]);
+			await vi.advanceTimersByTimeAsync(299_999);
+			expect(harness.session.getLastAssistantText()).toBe("parent done");
+			await vi.advanceTimersByTimeAsync(1);
+			await harness.session.waitForIdle();
+			expect(harness.session.getLastAssistantText()).toBe("Parent inspected the subagent");
+			expect(getToolResult(harness, "TaskOutput").details).toMatchObject({ status: "running" });
+			for (const result of await Promise.all(waiting)) {
+				expect(result.details).toMatchObject({ status: "running" });
+				expect(getMessageText(result)).toContain("The run is still active");
+			}
+			await vi.advanceTimersByTimeAsync(1_501_000);
 			expect(readTaskState(harness.sessionManager).tasks[0].status).toBe("in_progress");
-			const ctx = harness.session.extensionRunner.createToolContext("stop-test", undefined);
+			expect(
+				harness.session.messages.filter((m) => m.role === "custom" && m.customType === "pie.subagent-stalled"),
+			).toHaveLength(1);
+			harness.setResponses([fauxAssistantMessage("Parent handled the stop")]);
 			const stop = harness.session.getToolDefinition("TaskStop")!;
 			const result = await stop.execute("stop", { task_id: "1" }, undefined, undefined, ctx);
 			expect((result.details as SubagentRecord).status).toBe("stopped");

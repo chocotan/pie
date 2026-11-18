@@ -21,6 +21,7 @@ import { SettingsManager } from "../../core/settings-manager.ts";
 import { truncateMiddle } from "../../core/tools/truncate.ts";
 import { raceWithAbortSignal } from "../../utils/abort.ts";
 import { readTaskState, TASK_RUN_EVENT } from "../tasks/index.ts";
+import { monitorWorkProgress } from "../work-progress.ts";
 import { discoverAgentDefinitions } from "./definitions.ts";
 import { SubagentPanel } from "./panel.ts";
 import { renderSubagentCall, renderSubagentCompletion } from "./renderers.ts";
@@ -119,6 +120,7 @@ function assertDelegatableTask(ctx: ExtensionToolContext, taskId: string): void 
 interface Run {
 	record: SubagentRecord;
 	controller: AbortController;
+	stall: AbortController;
 	child?: AgentSession;
 	streaming?: AssistantMessage;
 	started: boolean;
@@ -128,6 +130,19 @@ interface Run {
 	execute: () => Promise<void>;
 }
 const codingToolNames = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "powershell"]);
+
+async function waitForSubagent(run: Run | undefined, signal?: AbortSignal): Promise<string | undefined> {
+	signal?.throwIfAborted();
+	if (!run) return;
+	const stall = run.stall.signal;
+	try {
+		await raceWithAbortSignal(run.done, signal ? AbortSignal.any([signal, stall]) : stall);
+	} catch (error) {
+		signal?.throwIfAborted();
+		if (stall.aborted && error === stall.reason && error instanceof Error) return error.message;
+		throw error;
+	}
+}
 
 function resultText(record: SubagentRecord): string {
 	return [
@@ -454,6 +469,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 			const run: Run = {
 				record,
 				controller,
+				stall: new AbortController(),
 				started: false,
 				done,
 				resolve,
@@ -469,9 +485,36 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 					let usageStart = 0;
 					let runStart = 0;
 					let limitReached = false;
+					const progress = monitorWorkProgress((idleSeconds) => {
+						if (closing) return;
+						const { id, description, taskId, activeTool, turns } = record;
+						const details = { agentId: id, taskId, description, idleSeconds, activeTool, turns };
+						const stage =
+							record.status === "queued"
+								? "during startup"
+								: activeTool
+									? `while running ${activeTool}`
+									: "while waiting for the model";
+						const observation = `Subagent ${id} has shown no model or tool progress for ${idleSeconds} seconds ${stage}. The run is still active.`;
+						run.stall.abort(new Error(observation));
+						const content = `${observation} Inspect it with get_subagent_result (wait: false), then decide whether to steer it, stop it, or continue independent work.\n${JSON.stringify(details)}`;
+						const busy = !ctx.isIdle();
+						pi.sendMessage(
+							{ customType: "pie.subagent-stalled", content, display: true, details },
+							{ deliverAs: "followUp", triggerTurn: ctx.mode === "tui" || ctx.mode === "rpc" },
+						);
+						if (busy && ctx.hasUI)
+							ctx.ui.notify(`Subagent ${id} has shown no progress for ${idleSeconds}s.`, "warning");
+					});
+					const reportProgress = () => {
+						if (run.stall.signal.aborted) run.stall = new AbortController();
+						progress.report();
+					};
 					const abort = () => {
+						progress.stop();
 						if (child) void child.abort();
 					};
+					controller.signal.addEventListener("abort", abort, { once: true });
 					try {
 						controller.signal.throwIfAborted();
 						const settings = SettingsManager.inMemory(pi.getSettings(), {
@@ -513,8 +556,8 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						record.thinking = child.thinkingLevel;
 						record.sessionFile = manager.getSessionFile();
 						record.status = "running";
-						controller.signal.addEventListener("abort", abort, { once: true });
 						controller.signal.throwIfAborted();
+						reportProgress();
 						save(record);
 						refresh();
 						let turns = 0;
@@ -523,6 +566,17 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						child.subscribe((event) => {
 							// Cancellation during prompt preflight can arrive before the child has a live run.
 							if (event.type === "agent_start" && controller.signal.aborted) abort();
+							if (
+								event.type === "turn_start" ||
+								event.type === "turn_end" ||
+								event.type === "tool_execution_start" ||
+								event.type === "tool_execution_update" ||
+								event.type === "tool_execution_end" ||
+								(event.type === "message_update" &&
+									"delta" in event.assistantMessageEvent &&
+									event.assistantMessageEvent.delta.length > 0)
+							)
+								reportProgress();
 							if (event.type === "turn_start" && !limitReached) {
 								record.turns = (record.turns ?? 0) + 1;
 								save(record);
@@ -545,7 +599,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 									void child?.steer(WRAP_UP_MESSAGE).catch(() => {});
 								} else if (wrapUpRequested && turns >= maxTurns + WRAP_UP_GRACE_TURNS) {
 									limitReached = true;
-									void child?.abort();
+									abort();
 								}
 							}
 						});
@@ -603,6 +657,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 						record.error = error instanceof Error ? error.message : String(error);
 					} finally {
 						clearTimeout(timeout);
+						progress.stop();
 						controller.signal.removeEventListener("abort", abort);
 						const timedOut = controller.signal.reason === timeoutError;
 						if (timedOut) {
@@ -673,11 +728,11 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 			pump();
 			return run;
 		};
-		const output = (record: SubagentRecord): AgentToolResult<SubagentRecord> => ({
+		const output = (record: SubagentRecord, waitNotice?: string): AgentToolResult<SubagentRecord> => ({
 			content: [
 				{
 					type: "text",
-					text: `${record.id} · ${record.agent} · ${record.status}\n${resultText(record)}`,
+					text: `${record.id} · ${record.agent} · ${record.status}\n${waitNotice ? `${waitNotice}\n` : ""}${resultText(record)}`,
 				},
 			],
 			details: structuredClone(record),
@@ -756,7 +811,7 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 			name: "get_subagent_result",
 			label: "Subagent result",
 			description:
-				"Read an agent result. Set wait to join a queued or running agent; do not poll while automatic completion is pending. Full output is preserved in the child session.",
+				"Read an agent result. Set wait to wait for completion or an inactivity notice. Do not poll while automatic completion is pending. Full output is preserved in the child session.",
 			parameters: Type.Object({ agent_id: Type.String(), wait: Type.Optional(Type.Boolean({ default: false })) }),
 			renderCall: (args, theme, ctx) => {
 				const record = records.get(args.agent_id);
@@ -772,8 +827,8 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 			async execute(_id, args, signal) {
 				const record = records.get(args.agent_id);
 				if (!record) throw new Error(`Unknown agent: ${args.agent_id}`);
-				if (args.wait) await raceWithAbortSignal(runs.get(record.id)?.done ?? Promise.resolve(), signal);
-				return output(record);
+				const notice = args.wait ? await waitForSubagent(runs.get(record.id), signal) : undefined;
+				return output(record, notice);
 			},
 		});
 		pi.registerTool({
@@ -887,7 +942,8 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 		pi.registerTool({
 			name: "TaskOutput",
 			label: "Task output",
-			description: "Read the latest delegated run for a task, optionally waiting for completion.",
+			description:
+				"Read the latest delegated run for a task, optionally waiting for completion or an inactivity notice.",
 			parameters: Type.Object({
 				task_id: Type.String(),
 				block: Type.Optional(Type.Boolean({ default: true })),
@@ -900,10 +956,11 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 				if ((args.block ?? true) && (args.timeout ?? 30000) > 0) {
 					const deadline = AbortSignal.timeout(args.timeout ?? 30000);
 					try {
-						await raceWithAbortSignal(
-							runs.get(record.id)?.done ?? Promise.resolve(),
+						const notice = await waitForSubagent(
+							runs.get(record.id),
 							signal ? AbortSignal.any([signal, deadline]) : deadline,
 						);
+						return output(record, notice);
 					} catch (error) {
 						signal?.throwIfAborted();
 						if (!deadline.aborted) throw error;

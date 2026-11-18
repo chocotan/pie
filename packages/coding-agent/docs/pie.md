@@ -94,7 +94,9 @@ TUI and RPC sessions default to background execution and receive completion noti
 
 `Agent` and `TaskExecute` accept `timeout_seconds`, with a default of 1,800 seconds per subagent. The clock starts when the subagent leaves the queue and includes tool execution and provider retries. Set `timeout_seconds: 0` for unlimited runtime. On timeout Pie cancels the run, returns its latest available text with the timeout error, and returns a linked task to `pending`. Background runs send their usual completion notification to the parent.
 
-`TaskOutput` has its own wait timeout in milliseconds. It defaults to 30,000 and accepts up to 600,000. `block: false` or `timeout: 0` returns current state immediately.
+After five minutes without model output or tool progress, Pie sends the parent an inactivity notice with the subagent ID and the last known activity. In TUI and RPC it starts a turn if the parent is idle or queues a follow-up if it is busy. There is one notice per quiet period, including for runs with `timeout_seconds: 0`. The run stays active so the parent can inspect it and decide how to proceed.
+
+Blocking `get_subagent_result` and `TaskOutput` calls also return the current state when the subagent reports inactivity. `TaskOutput` has its own wait timeout in milliseconds. It defaults to 30,000 and accepts up to 600,000. `block: false` or `timeout: 0` returns current state immediately.
 
 Each subagent uses its own `AgentSession`, inherits the parent's selected model and reasoning level, and can only use parent-provided coding tools. Child tool execution goes through the parent's tool hooks, preserving tool restrictions and sandbox replacements. This is a tool and context boundary, not an operating-system sandbox. Researcher/reviewer instructions prohibit edits, but shell access itself is not an enforced read-only filesystem boundary.
 
@@ -220,6 +222,8 @@ Tools: `bg_run`, `bg_status`, `bg_logs`, `bg_kill`. `/jobs` lists this session's
 Background jobs float below Todo and Subagents without taking keyboard focus. The panel, `/jobs`, and `bg_status` show running jobs first and sort each group by start time, newest first. The panel shows up to five entries and retains overflow behind `view all`. Click a row to inspect its command and bounded output. Closing the panel does not stop jobs; `/jobs` reopens it.
 
 Combined stdout/stderr is stored privately under `~/.pie/tasks/<session>/shell-<activation>/`. Each log is capped at 20MiB; exceeding the cap stops the job. `bg_logs` reads at most 50KiB and returns the full path. Completion notifications follow output closure and cleanup; they start a follow-up turn by default. Continue independent work or end the turn instead of polling. Disable notification or automatic follow-up per launch when appropriate.
+
+A job that produces no stdout or stderr for five minutes sends an inactivity notice to the parent so it can inspect the job while it is still running. Pie reports each quiet period once, including for jobs with `timeoutSeconds: 0`. The job's notification and trigger options control whether the notice starts a turn automatically.
 
 Shutdown, reload and session replacement stop owned process trees. Saved PID files never grant ownership after a reload. Normal extension permission hooks apply to `bg_run`; a disabled or replaced shell is rejected. The feature uses ordinary user permissions and is not an operating-system sandbox. See the [ISC attribution and integration boundary](third-party/pi-background-tasks/NOTICE.md), including the low-level SDK override limitation. Separate upstream Fusion/delegate/attestation systems are outside this shell port.
 

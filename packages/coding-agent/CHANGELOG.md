@@ -17,6 +17,7 @@
 - `bg_run` accepts `taskId` and `Agent` accepts `task_id` to keep a linked task's status in step with a background job or a single delegated run. Both reject tasks that are not pending, and blocked tasks are rejected before the work starts
 
 - `Agent` and `TaskExecute` accept `timeout_seconds` for each subagent. The default is 1,800 seconds after leaving the queue, and `0` disables the deadline. On timeout, Pie cancels the run and reports the failure to the parent.
+- Background jobs and subagents send the parent an actionable notice after five minutes without observable progress. A notice wakes an idle parent or queues a follow-up, and the work stays active for inspection.
 
 ### Changed
 

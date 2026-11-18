@@ -8,7 +8,7 @@ import { createBackgroundExtension } from "../../src/extensions/background/index
 import tasksPlugin, { readTaskState, TASK_STATE_ENTRY } from "../../src/extensions/tasks/index.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
-import { createHarness, createTestUiContext, getToolResult, type Harness } from "./harness.ts";
+import { createHarness, createTestUiContext, getMessageText, getToolResult, type Harness } from "./harness.ts";
 
 let directory: string;
 let harness: Harness | undefined;
@@ -36,6 +36,7 @@ afterEach(async () => {
 		harness.cleanup();
 		harness = undefined;
 	}
+	vi.useRealTimers();
 	await rm(directory, { recursive: true, force: true });
 });
 describe("background extension tool integration", () => {
@@ -125,6 +126,45 @@ describe("background extension tool integration", () => {
 		expect(JSON.stringify(getToolResult(harness, "bg_logs").content)).toContain("fixture stdout");
 		expect(JSON.stringify(getToolResult(harness, "bg_logs").content)).toContain("fixture stderr");
 	});
+	it.skipIf(process.platform === "win32")(
+		"wakes the parent to investigate a silent job before its deadline",
+		async () => {
+			vi.useFakeTimers();
+			harness = await createHarness({ extensionFactories: [createBackgroundExtension({ agentDir: directory })] });
+			await harness.session.bindExtensions({ mode: "rpc", uiContext: createTestUiContext() });
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall("bg_run", {
+						command: `exec ${JSON.stringify(process.execPath)} -e 'setInterval(() => {}, 1000)'`,
+						name: "Silent job",
+						timeoutSeconds: 900,
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("Parent is idle"),
+			]);
+			await harness.session.prompt("Start the silent fixture");
+			const { id } = launchedTask(harness);
+			harness.setResponses([
+				(context) => {
+					const text = context.messages.map(getMessageText).join("\n");
+					expect(text).toContain(`Background job ${id} has produced no stdout or stderr for 300 seconds`);
+					return fauxAssistantMessage(fauxToolCall("bg_status", { taskId: id }), { stopReason: "toolUse" });
+				},
+				fauxAssistantMessage("Parent inspected the job"),
+			]);
+			await vi.advanceTimersByTimeAsync(299_999);
+			expect(harness.session.getLastAssistantText()).toBe("Parent is idle");
+			await vi.advanceTimersByTimeAsync(1);
+			await harness.session.waitForIdle();
+			expect(getToolResult(harness, "bg_status").details).toMatchObject({ status: "running" });
+			expect(harness.session.getLastAssistantText()).toBe("Parent inspected the job");
+			await vi.advanceTimersByTimeAsync(300_000);
+			expect(
+				harness.session.messages.filter((m) => m.role === "custom" && m.customType === "pie.background-stalled"),
+			).toHaveLength(1);
+		},
+	);
 	it.skipIf(process.platform === "win32")(
 		"stops owned work through bg_kill and never revives its panel during shutdown",
 		async () => {

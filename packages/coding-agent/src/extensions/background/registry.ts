@@ -15,6 +15,7 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
+import { monitorWorkProgress } from "../work-progress.ts";
 import { type ProcessTreeOptions, stopProcessTree } from "./process-tree.ts";
 
 export const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
@@ -61,6 +62,7 @@ interface Run {
 	done: Promise<void>;
 	stop?: Promise<void>;
 	timeout?: NodeJS.Timeout;
+	progress?: ReturnType<typeof monitorWorkProgress>;
 	stopping?: "user" | "shutdown" | "failure";
 	finalizing: boolean;
 }
@@ -77,6 +79,7 @@ export interface RegistryOptions {
 	sessionId: string;
 	onChange?: () => void;
 	onCompletion?: (task: BackgroundTask) => void;
+	onStall?: (task: BackgroundTask, idleSeconds: number) => void;
 	onError?: (error: unknown) => void;
 	spawn?: typeof spawnProcess;
 	processTree?: ProcessTreeOptions;
@@ -184,6 +187,17 @@ export class BackgroundRegistry {
 			if (child.pid) trackDetachedChildPid(child.pid);
 			run = { task, stream, child, done: Promise.resolve(), finalizing: false };
 			const owned = run;
+			const { onStall } = this.options;
+			if (onStall) {
+				owned.progress = monitorWorkProgress((idleSeconds) => {
+					if (this.closing) return;
+					try {
+						onStall({ ...task }, idleSeconds);
+					} catch (error) {
+						this.options.onError?.(error);
+					}
+				});
+			}
 			this.tasks.set(id, task);
 			this.runs.set(id, owned);
 			const fail = (error: string) => {
@@ -197,6 +211,7 @@ export class BackgroundRegistry {
 				const remaining = Math.max(0, (this.options.maxOutputBytes ?? MAX_OUTPUT_BYTES) - task.bytesWritten);
 				const bytes = chunk.subarray(0, remaining);
 				if (bytes.length) {
+					owned.progress?.report();
 					task.bytesWritten += bytes.length;
 					if (!stream.write(bytes)) {
 						child.stdout?.pause();
@@ -265,6 +280,7 @@ export class BackgroundRegistry {
 		}
 	}
 	private requestStop(run: Run): Promise<void> {
+		run.progress?.stop();
 		// Keep one force owner even when TERM causes the group leader to exit first.
 		run.stop ??= stopProcessTree(run.child, this.options.processTree);
 		return run.stop;
