@@ -9,6 +9,7 @@ import type {
 } from "../../core/extensions/types.ts";
 import { normalizePath } from "../../utils/paths.ts";
 import { getPowerShellConfig, getShellConfig } from "../../utils/shell.ts";
+import { readTaskState, TASK_RUN_EVENT } from "../tasks/index.ts";
 import {
 	BACKGROUND_ACTIVITY_EVENT,
 	BackgroundRegistry,
@@ -31,6 +32,9 @@ const runSchema = Type.Object({
 	timeoutSeconds: Type.Optional(Type.Number({ minimum: 0.001, maximum: 2147483.647 })),
 	notifyOnCompletion: Type.Optional(Type.Boolean({ default: true })),
 	triggerOnCompletion: Type.Optional(Type.Boolean({ default: true })),
+	taskId: Type.Optional(
+		Type.String({ description: "Link this job to a pending task; the task status follows the job" }),
+	),
 });
 
 /** Replacements can carry sandbox/remote behavior for which no background spawn adapter exists. */
@@ -56,6 +60,7 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 		let context: ExtensionContext | undefined;
 		let dismissed = false;
 		let closeDetail: (() => void) | undefined;
+		const taskLinks = new Map<string, { taskId: string; owner: string }>();
 		const report = (error: unknown) => context?.ui.notify(`Background tasks: ${String(error)}`, "error");
 		const current = (ctx: ExtensionContext): BackgroundRegistry => {
 			if (!registry || ctx.sessionManager.getSessionId() !== context?.sessionManager.getSessionId())
@@ -137,6 +142,7 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 		};
 		pi.on("session_start", async (_event, ctx) => {
 			await registry?.shutdown();
+			taskLinks.clear();
 			context = ctx;
 			dismissed = false;
 			registry = new BackgroundRegistry({
@@ -148,7 +154,16 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 					pi.events.emit(BACKGROUND_ACTIVITY_EVENT, { running });
 				},
 				onError: report,
-				onCompletion: (task) =>
+				onCompletion: (task) => {
+					const link = taskLinks.get(task.id);
+					if (link) {
+						taskLinks.delete(task.id);
+						pi.events.emit(TASK_RUN_EVENT, {
+							taskId: link.taskId,
+							status: task.status === "completed" ? "completed" : "pending",
+							owner: link.owner,
+						});
+					}
 					pi.sendMessage(
 						{
 							customType: "background-task-notification",
@@ -157,7 +172,8 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 							content: `<background-task-notification>\n${JSON.stringify({ taskId: task.id, description: task.description, status: task.status, exitCode: task.exitCode, error: task.error, outputPath: task.outputPath })}\nTask finished and output is closed. Any persistence or cleanup error is included above. Use bg_logs only if output is needed; do not poll bg_status to reconfirm.\n</background-task-notification>`,
 						},
 						{ deliverAs: "steer", triggerTurn: task.triggerOnCompletion },
-					),
+					);
+				},
 			});
 			refresh();
 		});
@@ -177,10 +193,22 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 			promptSnippet: "Start a long-running background shell command",
 			promptGuidelines: [
 				"Completion notifications and steering turns are enabled by default. After bg_run continue independent work or end your turn; do not poll or sleep waiting. Use bg_status/bg_logs only for deliberate inspection. All tasks stop on session shutdown or reload.",
+				"Pass taskId to keep a linked task's status in step with the job instead of updating it by hand.",
 			],
 			async execute(_id, args: Static<typeof runSchema>, signal, _update, ctx) {
 				if (ctx.mode !== "tui" && ctx.mode !== "rpc")
 					throw new Error("Background shell tasks require a persistent TUI or RPC session");
+				if (args.taskId) {
+					const state = readTaskState(ctx.sessionManager);
+					const task = state.tasks.find((item) => item.id === args.taskId);
+					if (!task) throw new Error(`Unknown task: ${args.taskId}`);
+					if (task.status !== "pending")
+						throw new Error(`Task ${args.taskId} must be pending to link a job (it is ${task.status})`);
+					const blocked = task.blockedBy.filter(
+						(id) => state.tasks.find((item) => item.id === id)?.status !== "completed",
+					);
+					if (blocked.length) throw new Error(`Task ${args.taskId} is blocked by ${blocked.join(", ")}`);
+				}
 				const shellName = args.shell ?? "bash";
 				assertLocalShell(pi, ctx, shellName);
 				const settings = pi.getSettings();
@@ -199,6 +227,18 @@ export function createBackgroundExtension(options: { agentDir?: string } = {}): 
 					args,
 					signal,
 				);
+				if (args.taskId) {
+					const owner = `bg:${task.id}`;
+					try {
+						pi.events.emit(TASK_RUN_EVENT, { taskId: args.taskId, status: "in_progress", owner });
+						taskLinks.set(task.id, { taskId: args.taskId, owner });
+					} catch (error) {
+						await current(ctx)
+							.stop(task.id)
+							.catch(() => {});
+						throw error;
+					}
+				}
 				return result({
 					task,
 					guidance: task.notifyOnCompletion

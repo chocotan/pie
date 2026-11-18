@@ -5,6 +5,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBackgroundExtension } from "../../src/extensions/background/index.ts";
+import tasksPlugin, { readTaskState, TASK_STATE_ENTRY } from "../../src/extensions/tasks/index.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
 import { createHarness, createTestUiContext, getToolResult, type Harness } from "./harness.ts";
@@ -268,5 +269,65 @@ describe("background extension tool integration", () => {
 		expect(getToolResult(harness, "bg_run").isError).toBe(true);
 		expect(JSON.stringify(getToolResult(harness, "bg_run").content)).toContain("persistent TUI or RPC");
 		expect(getToolResult(harness, "bg_status").details).toEqual([]);
+	});
+	it("keeps a linked task's status in step with a background job", async () => {
+		harness = await createHarness({
+			extensionFactories: [createBackgroundExtension({ agentDir: directory }), tasksPlugin],
+		});
+		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
+		harness.sessionManager.appendCustomEntry(TASK_STATE_ENTRY, {
+			nextId: 2,
+			tasks: [
+				{
+					id: "1",
+					subject: "Fixture job",
+					description: "Run and verify",
+					status: "pending",
+					metadata: {},
+					blockedBy: [],
+				},
+			],
+		});
+		let completed!: () => void;
+		const completion = new Promise<void>((resolve) => {
+			completed = resolve;
+		});
+		harness.session.subscribe((event) => {
+			if (
+				event.type === "message_end" &&
+				event.message.role === "custom" &&
+				event.message.customType === "background-task-notification"
+			)
+				completed();
+		});
+		harness.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall("bg_run", {
+					command: "printf linked",
+					name: "Linked",
+					taskId: "1",
+					triggerOnCompletion: false,
+				}),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("launched"),
+		]);
+		await harness.session.prompt("Run the linked fixture");
+		expect(getToolResult(harness, "bg_run").isError).toBe(false);
+		await completion;
+		expect(readTaskState(harness.sessionManager).tasks[0]).toMatchObject({
+			status: "completed",
+			owner: `bg:${launchedTask(harness).id}`,
+		});
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("bg_run", { command: "true", name: "Again", taskId: "1" }), {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("Link the completed task");
+		expect(getToolResult(harness, "bg_run").isError).toBe(true);
+		expect(JSON.stringify(getToolResult(harness, "bg_run").content)).toContain("must be pending");
 	});
 });

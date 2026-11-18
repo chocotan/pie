@@ -90,7 +90,20 @@ const agentParams = Type.Object({
 	run_in_background: Type.Optional(Type.Boolean({ default: true })),
 	inherit_context: Type.Optional(Type.Boolean({ default: false })),
 	resume: Type.Optional(Type.String({ description: "ID of a completed agent whose session should continue" })),
+	task_id: Type.Optional(
+		Type.String({ description: "Link the run to a pending task; the task status follows the run" }),
+	),
 });
+
+/** Reject a delegation link to a task that is not ready to start. */
+function assertDelegatableTask(ctx: ExtensionToolContext, taskId: string): void {
+	const state = readTaskState(ctx.sessionManager);
+	const task = state.tasks.find((item) => item.id === taskId);
+	if (!task) throw new Error(`Unknown task: ${taskId}`);
+	if (task.status !== "pending") throw new Error(`Task ${taskId} must be pending to delegate (it is ${task.status})`);
+	const blocked = task.blockedBy.filter((id) => state.tasks.find((item) => item.id === id)?.status !== "completed");
+	if (blocked.length) throw new Error(`Task ${taskId} is blocked by ${blocked.join(", ")}`);
+}
 interface Run {
 	record: SubagentRecord;
 	controller: AbortController;
@@ -646,7 +659,10 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 				const singleUse = ctx.mode === "print" || ctx.mode === "json";
 				if (singleUse && args.run_in_background === true)
 					throw new Error("Background agents require a TUI or RPC session; use run_in_background: false here");
-				const run = start(prepare({ ...args, run_in_background: args.run_in_background ?? !singleUse }, ctx));
+				if (args.task_id) assertDelegatableTask(ctx, args.task_id);
+				const run = start(
+					prepare({ ...args, run_in_background: args.run_in_background ?? !singleUse }, ctx, args.task_id),
+				);
 				if (args.run_in_background ?? !singleUse) return output(run.record);
 				const abort = () => {
 					void stop(run.record.id);

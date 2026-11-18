@@ -4,6 +4,7 @@ import backgroundExtension from "./background/index.ts";
 import codemodeExtension from "./codemode/index.ts";
 import compactModelExtension from "./compact-model/index.ts";
 import continueWatchdogExtension from "./continue-watchdog/index.ts";
+import goalExtension from "./goal/index.ts";
 import llamaExtension from "./llama/index.ts";
 import mcpExtension from "./mcp/index.ts";
 import ponytailExtension from "./ponytail/index.ts";
@@ -20,6 +21,7 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "compact-model", factory: compactModelExtension, builtin: true },
 	{ name: "ponytail", factory: ponytailExtension, replaceable: true, builtin: true },
 	{ name: "retry", factory: retryExtension, replaceable: true, builtin: true },
+	{ name: "goal", factory: goalExtension, replaceable: true, builtin: true },
 	{ name: "usage", factory: usageExtension, replaceable: true, builtin: true },
 	{ name: "tasks", factory: tasksExtension, replaceable: true, builtin: true },
 	{ name: "subagents", factory: subagentsExtension, replaceable: true, builtin: true },

@@ -1,6 +1,6 @@
 # Pie built-in plugins
 
-Pie ships task tracking, subagents, background shell jobs, structured user questions, Ponytail and a usage dashboard as built-in plugins. The terminal provides a rounded composer and dismissible Todo/Subagents panels stacked at the top right. It is a fork of [Pi](https://github.com/earendil-works/pi), originally created by Mario Zechner; the original MIT license is preserved.
+Pie ships task tracking, goals, subagents, background shell jobs, structured user questions, Ponytail and a usage dashboard as built-in plugins. The terminal provides a rounded composer and dismissible Todo/Subagents panels stacked at the top right. It is a fork of [Pi](https://github.com/earendil-works/pi), originally created by Mario Zechner; the original MIT license is preserved.
 
 ## Configuration directory
 
@@ -69,11 +69,21 @@ State is stored as session custom entries and reconstructed from the active bran
 
 `/tasks` and `/todos` open the floating Todo panel in the TUI and show task details in other modes. The panel appears at the top right when tasks exist without taking keyboard focus. An empty list stays hidden; deleting the last task closes the panel. Lists show at most five entries, ordered as in progress, pending, then completed. When more than ten records exist, the oldest completed tasks are removed and their dependency links are cleared. Unfinished tasks are never removed automatically; overflow remains accessible with `view all` when more entries exist than the panel shows. It shows task subjects; click a task for its saved requirements or `[x]` to close. Task updates do not reopen a dismissed panel; `/tasks` reopens it.
 
+## Goals
+
+Tools: `GoalSet`, `GoalGet`, `GoalUpdate`. `/goal <objective>` sets a goal; `/goal` shows it; `/goal pause|resume|complete|clear` controls it; `/goal status` is the same as `/goal`.
+
+A goal is one durable completion objective per session. While it is active and armed, every settled turn starts another round until the goal is complete, paused, or the round cap (default 20) is reached. Each round injects a hidden `<goal_round>` message naming the objective, the round budget, and the current task ledger. Rounds wait while a queued or running subagent or a background shell can still change the result; the completion notification resumes the work after that turn.
+
+Completion is gated on the ledger: `GoalUpdate complete` is rejected while any task is pending or in_progress, so finished tasks must be marked completed first. `/goal complete` is a human decision and leaves the ledger as it is. `TaskExecute` links subagent runs to tasks; `Agent` accepts `task_id` and `bg_run` accepts `taskId` so a single delegated run or background job keeps its task status in step.
+
+Continuation is process-local: a resumed or forked session stays disarmed until the next message or `/goal resume`. An interrupted run (Escape) disarms it. At the cap the goal is paused; `/goal resume` adds another default budget. State is stored as session custom entries on the active branch, like tasks. Disable the plugin with `"extensions": ["-builtin:goal"]`.
+
 ## Subagents
 
 Tools:
 
-- `Agent`: start a bounded delegated run, defaulting to `worker`.
+- `Agent`: start a bounded delegated run, defaulting to `worker`. Pass `task_id` to link a pending task to the run.
 - `list_subagents`: available definitions and session runs.
 - `get_subagent_result`: retrieve a run, optionally joining it.
 - `steer_subagent`: guide a running agent at a tool boundary.
@@ -203,7 +213,7 @@ Disable the plugin with `"extensions": ["-builtin:compact-model"]` or `--no-exte
 
 ## Background shell jobs
 
-Tools: `bg_run`, `bg_status`, `bg_logs`, `bg_kill`. `/jobs` lists this session's jobs; `/jobs <id>` opens output. `bg_run` requires `command` and a short `name`, with an optional `description`, `shell` (`bash` or `powershell`), `timeoutSeconds`, `notifyOnCompletion` and `triggerOnCompletion`. Bash uses Pie's existing shell path and command prefix. Jobs require a persistent TUI or RPC session.
+Tools: `bg_run`, `bg_status`, `bg_logs`, `bg_kill`. `/jobs` lists this session's jobs; `/jobs <id>` opens output. `bg_run` requires `command` and a short `name`, with an optional `description`, `shell` (`bash` or `powershell`), `timeoutSeconds`, `notifyOnCompletion`, `triggerOnCompletion` and `taskId`. A linked task is marked in progress when the job starts and completed when it exits successfully; failure, timeout, or kill returns it to pending. Bash uses Pie's existing shell path and command prefix. Jobs require a persistent TUI or RPC session.
 
 Background jobs float below Todo and Subagents without taking keyboard focus. The panel prefers active jobs, shows up to five entries even when all have finished, and retains overflow behind `view all`. Click a row to inspect its command and bounded output. Closing the panel does not stop jobs; `/jobs` reopens it.
 
