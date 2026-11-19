@@ -160,6 +160,9 @@
 			"@earendil-works/pi-coding-agent": [
 				"../../../packages/coding-agent/src/index.ts"
 			],
+			"private-inquiry-subagents-runtime/watchdog-runtime": [
+				"../../../packages/coding-agent/vendor/private-inquiry-subagents-runtime/build/watchdog-runtime.d.ts"
+			],
 			"@earendil-works/pi-coding-agent/hooks": [
 				"../../../packages/coding-agent/src/core/hooks/index.ts"
 			],

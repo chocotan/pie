@@ -22,6 +22,8 @@
 ### Changed
 
 - Background job and subagent lists show running work first and sort each group by start time, newest first. This order applies to both panels, `/jobs`, `/agents`, `bg_status`, and `list_subagents`.
+- The default model prompt asks Pie to recognize substantial multi-step goals from the conversation, track their tasks and dependencies, and delegate suitable independent work without a slash command.
+- Background shell jobs now send a notice every five minutes without output until they produce output or finish.
 
 ### Fixed
 

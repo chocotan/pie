@@ -7,6 +7,7 @@ import { renderBackgroundCompletion } from "../src/extensions/background/rendere
 import type { SubagentRecord } from "../src/extensions/subagents/index.ts";
 import { renderSubagentCompletion } from "../src/extensions/subagents/renderers.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
+import { keyHint, keyText } from "../src/modes/interactive/components/keybinding-hints.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -59,6 +60,8 @@ const mouse = (type: TuiMouseEvent["type"], y = 0): TuiMouseEvent => ({
 	ctrl: false,
 	clickCount: 1,
 });
+
+const renderOptions = { expanded: false, outputPad: 1, keyText, keyHint };
 
 describe("completion notifications", () => {
 	beforeEach(() => initTheme("dark"));
@@ -123,7 +126,7 @@ describe("completion notifications", () => {
 				error: "Command exited with code 1",
 				exitCode: 1,
 			}),
-			{ expanded: false, outputPad: 1 },
+			renderOptions,
 			theme,
 		)!;
 		expect(failed.render(80).join("\n")).toContain(theme.fg("error", "Command exited with code 1"));
@@ -133,7 +136,7 @@ describe("completion notifications", () => {
 				status: "error",
 				error: "Provider unavailable",
 			}),
-			{ expanded: false, outputPad: 1 },
+			renderOptions,
 			theme,
 		)!;
 		expect(failedAgent.render(80).join("\n")).toContain(theme.fg("error", "Provider unavailable"));
@@ -143,7 +146,7 @@ describe("completion notifications", () => {
 				status: "stopped",
 				stopReason: "Subagent turn limit reached",
 			}),
-			{ expanded: false, outputPad: 1 },
+			renderOptions,
 			theme,
 		)!;
 		const text = stopped.render(80).join("\n");
@@ -152,19 +155,11 @@ describe("completion notifications", () => {
 	});
 	it("omits progress when an older subagent record has no turn counts", () => {
 		const { turns: _turns, maxTurns: _maxTurns, ...older } = agent;
-		const component = renderSubagentCompletion(
-			notification("pie.subagent-completion", older),
-			{ expanded: false, outputPad: 1 },
-			theme,
-		)!;
+		const component = renderSubagentCompletion(notification("pie.subagent-completion", older), renderOptions, theme)!;
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("Subagent · completed · 5.0s");
 	});
 	it("expands only by clicking the header, highlights on hover and stays bounded", () => {
-		const component = renderSubagentCompletion(
-			notification("pie.subagent-completion", agent),
-			{ expanded: false, outputPad: 1 },
-			theme,
-		)!;
+		const component = renderSubagentCompletion(notification("pie.subagent-completion", agent), renderOptions, theme)!;
 		for (const width of [1, 2, 10, 40, 80])
 			expect(component.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
 		const original = component.render(80);
@@ -178,23 +173,16 @@ describe("completion notifications", () => {
 		expect(stripAnsi(component.render(80).join("\n"))).not.toContain("Finding 8");
 	});
 	it("falls back safely for missing structured details and preserves remapped output padding", () => {
+		const options = { ...renderOptions, outputPad: 0 };
 		expect(
-			renderBackgroundCompletion(
-				notification<BackgroundTask>("background-task-notification"),
-				{ expanded: false, outputPad: 0 },
-				theme,
-			),
+			renderBackgroundCompletion(notification<BackgroundTask>("background-task-notification"), options, theme),
 		).toBeUndefined();
 		expect(
-			renderSubagentCompletion(
-				notification<SubagentRecord>("pie.subagent-completion"),
-				{ expanded: false, outputPad: 0 },
-				theme,
-			),
+			renderSubagentCompletion(notification<SubagentRecord>("pie.subagent-completion"), options, theme),
 		).toBeUndefined();
 		const component = renderBackgroundCompletion(
 			notification("background-task-notification", background),
-			{ expanded: false, outputPad: 0 },
+			options,
 			theme,
 		)!;
 		expect(stripAnsi(component.render(80)[0])).toMatch(/^▸ Background task/);
@@ -206,7 +194,7 @@ describe("completion notifications", () => {
 			name: "\x1b[31mCode checks\x1b[0m\nfinished",
 			error: Array.from({ length: 20 }, (_, index) => `Diagnostic ${index + 1}`).join("\n"),
 		});
-		const component = renderBackgroundCompletion(message, { expanded: false, outputPad: 1 }, theme)!;
+		const component = renderBackgroundCompletion(message, renderOptions, theme)!;
 		const rendered = component.render(80);
 		expect(rendered.length).toBeLessThanOrEqual(7);
 		const text = stripAnsi(rendered.join("\n"));

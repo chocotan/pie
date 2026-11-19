@@ -22,6 +22,7 @@ import tasksPlugin, {
 	type TaskState,
 	updateTask,
 } from "../../src/extensions/tasks/index.ts";
+import { keyHint, keyText } from "../../src/modes/interactive/components/keybinding-hints.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
 import { raceWithAbortSignal } from "../../src/utils/abort.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
@@ -447,7 +448,9 @@ describe("native subagents plugin", () => {
 			if (!notification || notification.role !== "custom") throw new Error("Missing subagent notification");
 			initTheme("dark");
 			const renderer = harness.session.extensionRunner.getMessageRenderer(notification.customType)!;
-			const rendered = renderer(notification, { expanded: false, outputPad: 1 }, theme)!.render(80);
+			const rendered = renderer(notification, { expanded: false, outputPad: 1, keyText, keyHint }, theme)!.render(
+				80,
+			);
 			expect(stripAnsi(rendered.join("\n"))).toContain("Subagent · stopped");
 			expect(stripAnsi(rendered.join("\n"))).toContain("Subagent turn limit reached");
 			expect(stripAnsi(rendered.join("\n"))).not.toContain("pie.subagent-completion");

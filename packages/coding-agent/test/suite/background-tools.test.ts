@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBackgroundExtension } from "../../src/extensions/background/index.ts";
 import tasksPlugin, { readTaskState, TASK_STATE_ENTRY } from "../../src/extensions/tasks/index.ts";
+import { keyHint, keyText } from "../../src/modes/interactive/components/keybinding-hints.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
 import { createHarness, createTestUiContext, getMessageText, getToolResult, type Harness } from "./harness.ts";
@@ -114,7 +115,7 @@ describe("background extension tool integration", () => {
 		expect(notification.content).toContain("do not poll bg_status to reconfirm");
 		initTheme("dark");
 		const renderer = harness.session.extensionRunner.getMessageRenderer(notification.customType)!;
-		const rendered = renderer(notification, { expanded: false, outputPad: 1 }, theme)!.render(80);
+		const rendered = renderer(notification, { expanded: false, outputPad: 1, keyText, keyHint }, theme)!.render(80);
 		expect(stripAnsi(rendered.join("\n"))).toContain("Background task · completed");
 		expect(stripAnsi(rendered.join("\n"))).not.toContain("background-task-notification");
 		harness.setResponses([
@@ -127,7 +128,7 @@ describe("background extension tool integration", () => {
 		expect(JSON.stringify(getToolResult(harness, "bg_logs").content)).toContain("fixture stderr");
 	});
 	it.skipIf(process.platform === "win32")(
-		"wakes the parent to investigate a silent job before its deadline",
+		"wakes the parent every five minutes while a background job stays silent",
 		async () => {
 			vi.useFakeTimers();
 			harness = await createHarness({ extensionFactories: [createBackgroundExtension({ agentDir: directory })] });
@@ -152,6 +153,11 @@ describe("background extension tool integration", () => {
 					return fauxAssistantMessage(fauxToolCall("bg_status", { taskId: id }), { stopReason: "toolUse" });
 				},
 				fauxAssistantMessage("Parent inspected the job"),
+				(context) => {
+					const text = context.messages.map(getMessageText).join("\n");
+					expect(text).toContain(`Background job ${id} has produced no stdout or stderr for 600 seconds`);
+					return fauxAssistantMessage("Parent saw the second notice");
+				},
 			]);
 			await vi.advanceTimersByTimeAsync(299_999);
 			expect(harness.session.getLastAssistantText()).toBe("Parent is idle");
@@ -160,9 +166,11 @@ describe("background extension tool integration", () => {
 			expect(getToolResult(harness, "bg_status").details).toMatchObject({ status: "running" });
 			expect(harness.session.getLastAssistantText()).toBe("Parent inspected the job");
 			await vi.advanceTimersByTimeAsync(300_000);
+			await harness.session.waitForIdle();
+			expect(harness.session.getLastAssistantText()).toBe("Parent saw the second notice");
 			expect(
 				harness.session.messages.filter((m) => m.role === "custom" && m.customType === "pie.background-stalled"),
-			).toHaveLength(1);
+			).toHaveLength(2);
 		},
 	);
 	it.skipIf(process.platform === "win32")(

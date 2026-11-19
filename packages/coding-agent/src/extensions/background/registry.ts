@@ -189,14 +189,17 @@ export class BackgroundRegistry {
 			const owned = run;
 			const { onStall } = this.options;
 			if (onStall) {
-				owned.progress = monitorWorkProgress((idleSeconds) => {
-					if (this.closing) return;
-					try {
-						onStall({ ...task }, idleSeconds);
-					} catch (error) {
-						this.options.onError?.(error);
-					}
-				});
+				owned.progress = monitorWorkProgress(
+					(idleSeconds) => {
+						if (this.closing) return;
+						try {
+							onStall({ ...task }, idleSeconds);
+						} catch (error) {
+							this.options.onError?.(error);
+						}
+					},
+					{ repeat: true },
+				);
 			}
 			this.tasks.set(id, task);
 			this.runs.set(id, owned);

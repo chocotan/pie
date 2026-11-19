@@ -6,6 +6,7 @@ import { formatMessageTime } from "../src/modes/interactive/components/message-t
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
+import * as syntaxHighlight from "../src/utils/syntax-highlight.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -61,6 +62,7 @@ describe("AssistantMessageComponent", () => {
 
 	test("reuses its Markdown across streaming and its end, and renders like a new component after a theme change", () => {
 		initTheme("dark");
+		vi.spyOn(Date, "now").mockReturnValue(Date.now());
 		const highlight = vi.spyOn(syntaxHighlight, "highlight");
 		const streaming: boolean[] = [];
 		const code = "```ts\nconst a = 1;\n```";
@@ -70,11 +72,12 @@ describe("AssistantMessageComponent", () => {
 		];
 		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
 			(markdown, { isStreaming }) => {
-				streaming.push(isStreaming());
+				streaming.push(isStreaming);
 				return markdown;
 			},
 		]);
-		component.updateContent(createAssistantMessage(content(code)), true);
+		const partial = createAssistantMessage(content(code));
+		component.updateContent(partial, true);
 		component.render(80);
 		const message = createAssistantMessage(content(`${code}\n\nThe end.`));
 		component.updateContent(message, false);
@@ -84,7 +87,11 @@ describe("AssistantMessageComponent", () => {
 
 		initTheme("light");
 		component.invalidate();
-		expect(component.render(80)).toEqual(new AssistantMessageComponent(message).render(80));
+		// Match the thinking state and timing without priming a Markdown render cache.
+		const fresh = new AssistantMessageComponent(undefined, false);
+		fresh.updateContent(partial, true);
+		fresh.updateContent(message, false);
+		expect(component.render(80)).toEqual(fresh.render(80));
 		initTheme("dark");
 	});
 

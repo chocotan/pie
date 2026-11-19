@@ -1,11 +1,14 @@
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EventBus } from "../../src/core/event-bus.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import { BACKGROUND_ACTIVITY_EVENT } from "../../src/extensions/background/registry.ts";
 import goalPlugin, { GOAL_STATE_ENTRY, readGoalState } from "../../src/extensions/goal/index.ts";
-import { SUBAGENT_ENTRY } from "../../src/extensions/subagents/index.ts";
-import tasksPlugin from "../../src/extensions/tasks/index.ts";
+import { createSubagentsExtension, SUBAGENT_ENTRY } from "../../src/extensions/subagents/index.ts";
+import tasksPlugin, { readTaskState } from "../../src/extensions/tasks/index.ts";
 import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
 const goal = (status: "active" | "paused" | "complete" = "active") => ({
@@ -82,6 +85,52 @@ describe("goal extension", () => {
 
 		await tool(harness, "GoalUpdate").execute("clear", { action: "clear" }, undefined, undefined, ctx);
 		expect(readGoalState(harness.sessionManager)).toBeNull();
+	});
+
+	it("guides the parent to set goals and delegate tasks without giving children orchestration tools", async () => {
+		const harness = await setup([
+			goalPlugin,
+			tasksPlugin,
+			createSubagentsExtension({ agentDir: join(tmpdir(), `pie-test-${randomUUID()}`) }),
+		]);
+		harness.setResponses([
+			({ messages }) => {
+				const tools = getCurrentTools(messages);
+				expect(getCurrentSystemPrompt(messages)).toContain("without waiting for a /goal command");
+				expect(tools.find((tool) => tool.name === "GoalSet")?.description).toContain(
+					"the conversation establishes",
+				);
+				expect(tools.find((tool) => tool.name === "TaskCreate")?.description).toContain("addBlockedBy");
+				expect(tools.find((tool) => tool.name === "TaskExecute")?.description).toContain("Proactively delegate");
+				return fauxAssistantMessage(fauxToolCall("GoalSet", { objective: "Prepare and verify release notes" }), {
+					stopReason: "toolUse",
+				});
+			},
+			fauxAssistantMessage(
+				fauxToolCall("TaskCreate", {
+					subject: "Review the release notes",
+					description: "Check that each item describes a user-facing change",
+					agentType: "reviewer",
+				}),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage(fauxToolCall("TaskExecute", { task_ids: ["1"] }), { stopReason: "toolUse" }),
+			({ messages }) => {
+				expect(getCurrentSystemPrompt(messages)).toContain("You are an isolated reviewer subagent");
+				expect(getCurrentTools(messages).map((tool) => tool.name)).not.toContain("GoalSet");
+				expect(getCurrentTools(messages).map((tool) => tool.name)).not.toContain("TaskExecute");
+				return fauxAssistantMessage("Review complete");
+			},
+			fauxAssistantMessage(fauxToolCall("GoalUpdate", { action: "complete" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("Release notes verified"),
+		]);
+		await harness.session.prompt("Prepare the release notes from the changelog and verify every entry.");
+
+		expect(readTaskState(harness.sessionManager).tasks[0]).toMatchObject({
+			status: "completed",
+			agentType: "reviewer",
+		});
+		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "complete", rounds: 0 });
 	});
 
 	it("continues with a round prompt that names the objective and the task ledger, then pauses at the cap", async () => {

@@ -1,7 +1,7 @@
 const STALL_DELAY_MS = 5 * 60 * 1000;
 
-/** Report sustained inactivity once, then rearm only after new progress. */
-export function monitorWorkProgress(onStalled: (idleSeconds: number) => void) {
+/** Report after five minutes without progress, optionally repeating until activity resumes. */
+export function monitorWorkProgress(onStalled: (idleSeconds: number) => void, { repeat = false } = {}) {
 	let lastProgress = performance.now();
 	let stopped = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -14,8 +14,12 @@ export function monitorWorkProgress(onStalled: (idleSeconds: number) => void) {
 	function check(): void {
 		timer = undefined;
 		const idleMs = performance.now() - lastProgress;
-		if (idleMs < STALL_DELAY_MS) schedule(STALL_DELAY_MS - idleMs);
-		else onStalled(Math.floor(idleMs / 1000));
+		if (idleMs < STALL_DELAY_MS) {
+			schedule(STALL_DELAY_MS - idleMs);
+			return;
+		}
+		if (repeat) schedule(STALL_DELAY_MS);
+		onStalled(Math.floor(idleMs / 1000));
 	}
 
 	schedule(STALL_DELAY_MS);

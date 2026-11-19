@@ -35,6 +35,7 @@ See [Providers](providers.md) for authentication, [Models](models.md) for compat
 Built-ins load by default in the CLI:
 
 - `builtin:tasks`
+- `builtin:goal`
 - `builtin:subagents`
 - `builtin:ask-user-question`
 - `builtin:ponytail`
@@ -72,6 +73,8 @@ State is stored as session custom entries and reconstructed from the active bran
 ## Goals
 
 Tools: `GoalSet`, `GoalGet`, `GoalUpdate`. `/goal <objective>` sets a goal; `/goal` shows it; `/goal pause|resume|complete|clear` controls it; `/goal status` is the same as `/goal`.
+
+With the default prompt and built-ins enabled, the model uses the conversation to decide when to set a goal. A clear outcome that takes several substantial steps prompts it to create the goal, record tasks and dependencies, and start subagents for independent work worth delegating. For example, a request to implement a migration, test it, and update the docs can start this workflow without a slash command. Quick questions, small one-off edits, and requests for a plan only do not need a goal. The current model makes the judgment as part of its regular response, without a separate classifier.
 
 A goal is one durable completion objective per session. While it is active and armed, every settled turn starts another round until the goal is complete, paused, or the round cap (default 20) is reached. Each round injects a hidden `<goal_round>` message naming the objective, the round budget, and the current task ledger. Rounds wait while a queued or running subagent or a background shell can still change the result; the completion notification resumes the work after that turn.
 
@@ -223,7 +226,7 @@ Background jobs float below Todo and Subagents without taking keyboard focus. Th
 
 Combined stdout/stderr is stored privately under `~/.pie/tasks/<session>/shell-<activation>/`. Each log is capped at 20MiB; exceeding the cap stops the job. `bg_logs` reads at most 50KiB and returns the full path. Completion notifications follow output closure and cleanup; they start a follow-up turn by default. Continue independent work or end the turn instead of polling. Disable notification or automatic follow-up per launch when appropriate.
 
-A job that produces no stdout or stderr for five minutes sends an inactivity notice to the parent so it can inspect the job while it is still running. Pie reports each quiet period once, including for jobs with `timeoutSeconds: 0`. The job's notification and trigger options control whether the notice starts a turn automatically.
+While a running job produces no stdout or stderr, Pie sends the parent an inactivity notice every five minutes, including for jobs with `timeoutSeconds: 0`. New output restarts the five-minute countdown; the notices stop when the job ends. The job's notification and trigger options control whether a notice starts a turn automatically.
 
 Shutdown, reload and session replacement stop owned process trees. Saved PID files never grant ownership after a reload. Normal extension permission hooks apply to `bg_run`; a disabled or replaced shell is rejected. The feature uses ordinary user permissions and is not an operating-system sandbox. See the [ISC attribution and integration boundary](third-party/pi-background-tasks/NOTICE.md), including the low-level SDK override limitation. Separate upstream Fusion/delegate/attestation systems are outside this shell port.
 
@@ -236,7 +239,7 @@ The implementation is adapted from [pi-usage](https://github.com/chocotan/pi-usa
 ## Terminal behavior
 
 - The conversation uses the full terminal width. There is no application sidebar.
-- Todo, Subagents and background jobs are non-capturing floating panels at the top right, in that order. They hide when empty. Closing a panel removes its space.
+- Todo, Subagents and background jobs are non-capturing floating panels at the top right, in that order. They hide when empty. After closing a panel with `[x]`, reopen it with `/tasks`, `/agents`, or `/jobs`, respectively. `/agents` and `/jobs` also open a selection list; press Escape to dismiss the list and leave the panel visible.
 - Rounded input borders show current run status/time on the left.
 - Token and context statistics use the original Pi footer, including input/output, cache reads/writes, cache hit rate, cost, and right-aligned model/thinking. Directories outside Git repositories have no branch placeholder.
 - Thinking stays collapsed while it streams and after it ends, showing a one-line preview of its latest content on the header. Clicking the header or the expanded body toggles it; the subagent detail view still expands live thinking. Explicit manual and global visibility choices are respected.

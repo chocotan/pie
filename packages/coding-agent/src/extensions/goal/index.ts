@@ -79,7 +79,7 @@ Continue toward the objective in this session. Treat the workspace, tool results
 Task ledger:
 ${taskRows(tasks)}
 
-Keep the ledger honest: mark a task that is already finished completed before starting new work, record new steps with TaskCreate, mark a task in_progress when you start it, and complete it only after the result is verified.${tasks.length ? "" : " No task is recorded yet; if the objective needs more than one step, create tasks for the remaining steps first."} Delegate independent tasks with TaskExecute when they have an agentType; while a subagent or background job runs, wait for its completion notice instead of duplicating its work. GoalUpdate complete is rejected while any task remains open, so complete finished tasks first and confirm the whole objective is achieved. If you need the user or cannot proceed, call GoalUpdate pause and explain why.
+Keep the ledger current: if TaskCreate is available, reuse existing tasks and record remaining steps.${tasks.length ? "" : " No task is recorded yet."} If TaskUpdate is available, mark work in progress when it starts and completed only after verification. If TaskExecute is available, delegate ready independent tasks with an agentType; while a subagent or background job runs, wait for its completion notice instead of duplicating its work. GoalUpdate complete is rejected while any task remains open, so verify the objective and finish its tasks first. If you need the user or cannot proceed, call GoalUpdate pause if available and explain why.
 </goal_round>`;
 }
 
@@ -192,10 +192,10 @@ export default function goalPlugin(pi: ExtensionAPI): void {
 		name: "GoalSet",
 		label: "Set goal",
 		description:
-			"Set the session's completion goal. While an active goal exists, every settled turn starts another round until the goal is complete, paused, or the round cap is reached. Use it when the user asks for a multi-step objective to be carried through, and keep the task ledger current. Only one goal can be active.",
+			"Set the session's completion goal. When GoalUpdate is available, proactively use GoalSet before substantive work if the conversation establishes a clear outcome the user wants carried through multiple substantial steps. Preserve the user's constraints and success criteria. Check GoalGet if available and the goal state is unknown. Reuse a matching active goal; do not replace or resume an unfinished goal without the user's direction. An active goal starts another round after each settled turn until complete, paused, or at the round cap.",
 		promptSnippet: "Set a completion goal that keeps the session working",
 		promptGuidelines: [
-			"Set a goal only for a multi-step objective the user wants carried to completion; routine single-turn work needs none.",
+			"When GoalSet and GoalUpdate are available, use GoalSet proactively for clear multi-step outcomes, without waiting for a /goal command. Skip it for quick questions, plan-only requests, and small one-off tasks.",
 		],
 		executionMode: "sequential",
 		parameters: Type.Object({

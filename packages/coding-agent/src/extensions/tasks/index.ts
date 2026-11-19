@@ -216,7 +216,7 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 		name: "TaskCreate",
 		label: "Create task",
 		description:
-			"Create a session task with pending status. Use for multi-step work; keep statuses current. Above ten records, the oldest completed tasks are removed automatically.",
+			"Create a pending session task. For a tracked goal, proactively record a few verifiable steps before starting work; reuse existing tasks and specify the deliverable and constraints. Use TaskUpdate addBlockedBy for real dependencies when available, and keep task statuses current. Above ten records, the oldest completed tasks are removed automatically.",
 		promptSnippet: "Create a task for multi-step work",
 		executionMode: "sequential",
 		parameters: Type.Object({

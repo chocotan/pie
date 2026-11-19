@@ -27,4 +27,23 @@ describe("work progress monitor", () => {
 		vi.advanceTimersByTime(fiveMinutes);
 		expect(stalled).toHaveBeenCalledTimes(2);
 	});
+
+	it("repeats every five minutes of silence when enabled, resetting on progress", () => {
+		vi.useFakeTimers();
+		const stalled = vi.fn();
+		const progress = monitorWorkProgress(stalled, { repeat: true });
+		vi.advanceTimersByTime(fiveMinutes * 2);
+		expect(stalled.mock.calls).toEqual([[300], [600]]);
+
+		vi.advanceTimersByTime(fiveMinutes / 2);
+		progress.report();
+		vi.advanceTimersByTime(fiveMinutes - 1);
+		expect(stalled).toHaveBeenCalledTimes(2);
+		vi.advanceTimersByTime(1);
+		expect(stalled.mock.calls).toEqual([[300], [600], [300]]);
+
+		progress.stop();
+		vi.advanceTimersByTime(fiveMinutes);
+		expect(stalled).toHaveBeenCalledTimes(3);
+	});
 });
