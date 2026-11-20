@@ -218,6 +218,9 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 		description:
 			"Create a pending session task. For a tracked goal, proactively record a few verifiable steps before starting work; reuse existing tasks and specify the deliverable and constraints. Use TaskUpdate addBlockedBy for real dependencies when available, and keep task statuses current. Above ten records, the oldest completed tasks are removed automatically.",
 		promptSnippet: "Create a task for multi-step work",
+		promptGuidelines: [
+			"When TaskCreate is available, record one task per verifiable deliverable for multi-step work. Reuse existing tasks and record dependencies before starting dependent work when TaskUpdate is available.",
+		],
 		executionMode: "sequential",
 		parameters: Type.Object({
 			subject: taskSchema.properties.subject,
@@ -274,6 +277,9 @@ export default function tasksPlugin(pi: ExtensionAPI): void {
 		description:
 			"Update a task or delete it with status deleted. Dependencies must exist and remain acyclic. Metadata merges; null removes a key.",
 		promptSnippet: "Update task progress and dependencies",
+		promptGuidelines: [
+			"When TaskUpdate is available, mark tasks you handle yourself in progress when you start and completed as soon as you verify their results. Before handing back control, reconcile the task list with what actually happened.",
+		],
 		executionMode: "sequential",
 		parameters: updateSchema,
 		async execute(_id, args, _signal, _update, ctx) {

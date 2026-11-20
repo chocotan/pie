@@ -15,7 +15,7 @@ import { readTaskState, sortTasks, type TaskRecord } from "../tasks/index.ts";
 export const GOAL_STATE_ENTRY = "pie.goal";
 export const GOAL_ROUND_MESSAGE = "pie.goal-round";
 const GOAL_STATUS_MESSAGE = "pie.goal-status";
-const DEFAULT_MAX_ROUNDS = 20;
+const DEFAULT_MAX_ROUNDS = 64;
 const MAX_ROUNDS = 1000;
 const goalSchema = Type.Object({
 	objective: Type.String({ minLength: 1, maxLength: 16_384 }),
@@ -79,7 +79,11 @@ Continue toward the objective in this session. Treat the workspace, tool results
 Task ledger:
 ${taskRows(tasks)}
 
-Keep the ledger current: if TaskCreate is available, reuse existing tasks and record remaining steps.${tasks.length ? "" : " No task is recorded yet."} If TaskUpdate is available, mark work in progress when it starts and completed only after verification. If TaskExecute is available, delegate ready independent tasks with an agentType; while a subagent or background job runs, wait for its completion notice instead of duplicating its work. GoalUpdate complete is rejected while any task remains open, so verify the objective and finish its tasks first. If you need the user or cannot proceed, call GoalUpdate pause if available and explain why.
+If the next step is clear and already authorized, take it now using the available tools. Keep the goal active while actionable work remains. If only delegated work is pending, let its completion notification resume the session.
+
+Reconcile the ledger with verified progress. Reuse existing tasks. When available, use TaskCreate for missing work, TaskUpdate to mark work in progress as it starts and completed as it is verified, and TaskExecute for ready tasks worth delegating.
+
+Before reporting success, verify the whole objective, resolve its open tasks, and call GoalUpdate with action complete if available. If no further progress is possible without user input, approval, or external action, use GoalUpdate with action pause if available and explain the specific blocker.
 </goal_round>`;
 }
 
@@ -126,6 +130,17 @@ export default function goalPlugin(pi: ExtensionAPI): void {
 		goal: GoalRecord,
 		changes: Partial<Pick<GoalRecord, "status" | "rounds" | "maxRounds">>,
 	): GoalRecord => ({ ...goal, ...changes, updatedAt: Date.now() });
+	const resume = (goal: GoalRecord): GoalRecord => {
+		if (goal.status === "complete") throw new Error("The goal is complete; set a new goal instead");
+		if (goal.rounds >= MAX_ROUNDS)
+			throw new Error(`Goal reached the ${MAX_ROUNDS}-round limit. Set a new goal to continue.`);
+		const maxRounds =
+			goal.rounds >= goal.maxRounds ? Math.min(goal.rounds + DEFAULT_MAX_ROUNDS, MAX_ROUNDS) : goal.maxRounds;
+		const resumed = update(goal, { status: "active", maxRounds });
+		save(resumed);
+		armed = true;
+		return resumed;
+	};
 
 	pi.events.on(BACKGROUND_ACTIVITY_EVENT, (data) => {
 		if (!data || typeof data !== "object" || !("running" in data)) return;
@@ -162,7 +177,8 @@ export default function goalPlugin(pi: ExtensionAPI): void {
 		const tasks = readTaskState(ctx.sessionManager).tasks;
 		if (goal.rounds >= goal.maxRounds) {
 			const paused = update(goal, { status: "paused" });
-			ctx.ui.notify(`Goal paused at its ${goal.maxRounds}-round cap. /goal resume adds more rounds.`, "info");
+			const nextStep = goal.rounds >= MAX_ROUNDS ? "Set a new goal to continue." : "/goal resume adds more rounds.";
+			ctx.ui.notify(`Goal paused at its ${goal.maxRounds}-round cap. ${nextStep}`, "info");
 			return {
 				entries: [
 					...event.entries,
@@ -195,7 +211,7 @@ export default function goalPlugin(pi: ExtensionAPI): void {
 			"Set the session's completion goal. When GoalUpdate is available, proactively use GoalSet before substantive work if the conversation establishes a clear outcome the user wants carried through multiple substantial steps. Preserve the user's constraints and success criteria. Check GoalGet if available and the goal state is unknown. Reuse a matching active goal; do not replace or resume an unfinished goal without the user's direction. An active goal starts another round after each settled turn until complete, paused, or at the round cap.",
 		promptSnippet: "Set a completion goal that keeps the session working",
 		promptGuidelines: [
-			"When GoalSet and GoalUpdate are available, use GoalSet proactively for clear multi-step outcomes, without waiting for a /goal command. Skip it for quick questions, plan-only requests, and small one-off tasks.",
+			"When GoalSet and GoalUpdate are available, use GoalSet before substantive work on a clear multi-step outcome the user wants delivered, without waiting for a /goal command. Include the deliverable, success criteria, and user constraints. Skip it for quick questions, plan-only requests, and small one-off tasks.",
 		],
 		executionMode: "sequential",
 		parameters: Type.Object({
@@ -251,7 +267,10 @@ export default function goalPlugin(pi: ExtensionAPI): void {
 		name: "GoalUpdate",
 		label: "Update goal",
 		description:
-			"Update the goal: complete (rejected while tasks remain open), pause, resume, or clear. Resume extends the round cap when it was exhausted.",
+			"Update the goal: complete (rejected while tasks remain open), pause, resume, or clear. Resume extends an exhausted round cap up to the maximum of 1000.",
+		promptGuidelines: [
+			"When GoalUpdate is available, verify the whole goal and reconcile its tasks before calling GoalUpdate with action complete. Call it before reporting success. Carry out clear, authorized next steps without asking whether to continue. Pause and explain the blocker if no further progress is possible without user input, approval, or external action.",
+		],
 		executionMode: "sequential",
 		parameters: Type.Object({
 			action: StringEnum(["complete", "pause", "resume", "clear"] as const),
@@ -282,13 +301,7 @@ export default function goalPlugin(pi: ExtensionAPI): void {
 				return result(view(paused, tasks, false, armed));
 			}
 			if (args.action === "resume") {
-				if (goal.status === "complete") throw new Error("The goal is complete; set a new goal instead");
-				const resumed = update(goal, {
-					status: "active",
-					maxRounds: goal.rounds >= goal.maxRounds ? goal.rounds + DEFAULT_MAX_ROUNDS : goal.maxRounds,
-				});
-				save(resumed);
-				armed = true;
+				const resumed = resume(goal);
 				return result(
 					view(
 						resumed,
@@ -328,16 +341,7 @@ export default function goalPlugin(pi: ExtensionAPI): void {
 			}
 			if (verb === "resume") {
 				if (!current) throw new Error("No goal is set");
-				if (current.status === "complete") throw new Error("The goal is complete; set a new goal instead");
-				save(
-					update(current, {
-						status: "active",
-						maxRounds:
-							current.rounds >= current.maxRounds ? current.rounds + DEFAULT_MAX_ROUNDS : current.maxRounds,
-					}),
-				);
-				armed = true;
-				show(readGoalState(ctx.sessionManager));
+				show(resume(current));
 				return;
 			}
 			if (verb === "complete") {

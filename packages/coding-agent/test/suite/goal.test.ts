@@ -96,7 +96,12 @@ describe("goal extension", () => {
 		harness.setResponses([
 			({ messages }) => {
 				const tools = getCurrentTools(messages);
-				expect(getCurrentSystemPrompt(messages)).toContain("without waiting for a /goal command");
+				const prompt = getCurrentSystemPrompt(messages);
+				expect(prompt).toContain("without waiting for a /goal command");
+				expect(prompt).toContain("reconcile its tasks before calling GoalUpdate with action complete");
+				expect(prompt).toContain("record one task per verifiable deliverable");
+				expect(prompt).toContain("reconcile the task list with what actually happened");
+				expect(prompt).toContain("launch ready, independent tasks together");
 				expect(tools.find((tool) => tool.name === "GoalSet")?.description).toContain(
 					"the conversation establishes",
 				);
@@ -130,7 +135,7 @@ describe("goal extension", () => {
 			status: "completed",
 			agentType: "reviewer",
 		});
-		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "complete", rounds: 0 });
+		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "complete", rounds: 0, maxRounds: 64 });
 	});
 
 	it("continues with a round prompt that names the objective and the task ledger, then pauses at the cap", async () => {
@@ -145,8 +150,9 @@ describe("goal extension", () => {
 			ctx,
 		);
 		let continued = "";
+		const earlyStop = "The next step is to verify the output. Should I continue?";
 		harness.setResponses([
-			fauxAssistantMessage("first pass"),
+			fauxAssistantMessage(earlyStop),
 			(context) => {
 				continued = JSON.stringify(context.messages);
 				return fauxAssistantMessage("second pass");
@@ -158,8 +164,13 @@ describe("goal extension", () => {
 		expect(continued).toContain("Ship the release");
 		expect(continued).toContain("Round: 1/1");
 		expect(continued).toContain("#1 [pending] Verify output");
-		expect(getAssistantTexts(harness)).toEqual(["first pass", "second pass"]);
+		expect(continued).toContain("If the next step is clear and already authorized, take it now");
+		expect(continued).toContain("resolve its open tasks, and call GoalUpdate with action complete");
+		expect(getAssistantTexts(harness)).toEqual([earlyStop, "second pass"]);
 		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "paused", rounds: 1 });
+
+		await tool(harness, "GoalUpdate").execute("resume", { action: "resume" }, undefined, undefined, ctx);
+		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "active", rounds: 1, maxRounds: 65 });
 	});
 
 	it("waits while a delegated subagent or background shell is still running", async () => {
@@ -202,11 +213,23 @@ describe("goal extension", () => {
 		const runner = harness.session.extensionRunner;
 		const run = (args: string) => runner.getCommand("goal")!.handler(args, runner.createCommandContext());
 		await run("Ship the release");
-		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "active", rounds: 0 });
+		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "active", rounds: 0, maxRounds: 64 });
 		await run("pause");
 		expect(readGoalState(harness.sessionManager)?.status).toBe("paused");
 		await run("resume");
 		expect(readGoalState(harness.sessionManager)?.status).toBe("active");
+
+		harness.sessionManager.appendCustomEntry(GOAL_STATE_ENTRY, {
+			goal: { ...goal("paused"), rounds: 980, maxRounds: 980 },
+		});
+		await run("resume");
+		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "active", rounds: 980, maxRounds: 1000 });
+		harness.sessionManager.appendCustomEntry(GOAL_STATE_ENTRY, {
+			goal: { ...goal("paused"), rounds: 1000, maxRounds: 1000 },
+		});
+		await expect(run("resume")).rejects.toThrow("1000-round limit");
+		expect(readGoalState(harness.sessionManager)).toMatchObject({ status: "paused", rounds: 1000, maxRounds: 1000 });
+
 		await run("clear");
 		expect(readGoalState(harness.sessionManager)).toBeNull();
 	});

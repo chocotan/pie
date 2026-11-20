@@ -859,6 +859,9 @@ export function createSubagentsExtension(options: { agentDir?: string } = {}): E
 			description:
 				"Delegate pending, unblocked tasks with an agentType to subagents. Proactively delegate bounded work that benefits from parallel execution or independent review. Set agentType (such as worker, researcher, or reviewer) and include the constraints and expected result when creating the task. Avoid overlapping edits or duplicating delegated work. Verify and integrate the results. Completion updates task status; failure or stop leaves a pending task.",
 			promptSnippet: "Delegate ready tasks from the session ledger to subagents",
+			promptGuidelines: [
+				"When TaskExecute is available, launch ready, independent tasks together if they benefit from parallel work or independent review. Continue useful work while subagents run and verify their results before reporting completion.",
+			],
 			parameters: Type.Object({
 				task_ids: Type.Array(Type.String(), { minItems: 1, maxItems: 32 }),
 				additional_context: Type.Optional(Type.String()),
